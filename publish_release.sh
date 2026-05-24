@@ -197,6 +197,9 @@ export RCLONE_S3_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
 export RCLONE_S3_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
 export RCLONE_S3_ENDPOINT="$R2_ENDPOINT"
 export RCLONE_S3_REGION="auto"
+# R2 tokens can't create buckets; skip rclone's pre-upload bucket check/create
+# (the bucket already exists) — otherwise the CreateBucket probe 403s.
+export RCLONE_S3_NO_CHECK_BUCKET="true"
 
 for entry in "${UPLOADS[@]}"; do
   IFS="|" read -r SRC DST <<< "$entry"

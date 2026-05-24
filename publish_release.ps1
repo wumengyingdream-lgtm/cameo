@@ -163,6 +163,9 @@ $env:RCLONE_S3_ACCESS_KEY_ID     = $env:R2_ACCESS_KEY_ID
 $env:RCLONE_S3_SECRET_ACCESS_KEY = $env:R2_SECRET_ACCESS_KEY
 $env:RCLONE_S3_ENDPOINT          = $env:R2_ENDPOINT
 $env:RCLONE_S3_REGION            = "auto"
+# R2 tokens can't create buckets; skip rclone's pre-upload bucket check/create
+# (the bucket already exists) - otherwise the CreateBucket probe 403s.
+$env:RCLONE_S3_NO_CHECK_BUCKET   = "true"
 $emptyConf = New-TemporaryFile
 try {
   foreach ($u in $uploads) {
