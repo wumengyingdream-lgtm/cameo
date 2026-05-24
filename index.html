@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cameo</title>
+    <!--
+      Cold-boot splash. Shown for the brief window between webview paint
+      and React mount. Inline so it has no external dependency. React
+      replaces #root content on mount, so it's swept away automatically.
+    -->
+    <style>
+      html, body, #root { height: 100%; margin: 0; }
+      body {
+        background: #FAFAFA;
+        color: #1A1A1C;
+        font-family: -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+        overflow: hidden;
+      }
+      .cm-boot {
+        display: grid;
+        place-items: center;
+        height: 100%;
+        font: 700 40px/1 inherit;
+        letter-spacing: -0.04em;
+        color: #E53935;
+        opacity: 0.9;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"><div class="cm-boot">Cameo</div></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

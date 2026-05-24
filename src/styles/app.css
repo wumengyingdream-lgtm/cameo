@@ -1,0 +1,2928 @@
+/* Cameo — light + red design system. Token reference: specs/DESIGN.md §15.
+   This stylesheet only carries appearance; layout/positioning mirrors the
+   imperative scene + component structure. */
+
+:root {
+  color-scheme: light;
+
+  /* ── primitives · neutral ─────────────────────────────────────────────── */
+  --cm-white: #ffffff;
+  --cm-gray-50: #fafafa;
+  --cm-gray-100: #f5f5f7;
+  --cm-gray-200: #e8e8ea;
+  --cm-gray-300: #d8d8dc;
+  --cm-gray-400: #b9b9bf;
+  --cm-gray-500: #a3a3a8;
+  --cm-gray-600: #8e8e93;
+  --cm-gray-700: #5c5c61;
+  --cm-gray-800: #2c2c2e;
+  --cm-gray-900: #1a1a1c;
+
+  /* ── primitives · brand red ───────────────────────────────────────────── */
+  --cm-brand-50: #fff1f2;
+  --cm-brand-100: #fee2e2;
+  --cm-brand-200: #fca5a5;
+  --cm-brand-300: #f87171;
+  --cm-brand-500: #e53935;
+  --cm-brand-600: #d32f2f;
+  --cm-brand-700: #c62828;
+
+  /* ── primitives · functional ──────────────────────────────────────────── */
+  --cm-success: #22c55e;
+  --cm-success-bg: #ecfdf3;
+  --cm-warning: #f59e0b;
+  --cm-warning-bg: #fef6e7;
+  --cm-danger: #dc2626;
+  --cm-danger-bg: #feecec;
+  --cm-danger-strong: #b91c1c;
+  --cm-info: #64748b;
+
+  /* ── semantic aliases (components reference these) ────────────────────── */
+  --cm-bg: var(--cm-gray-50);
+  --cm-surface: var(--cm-white);
+  --cm-panel: var(--cm-gray-50);
+  --cm-canvas: var(--cm-gray-100);
+  --cm-fg: var(--cm-gray-900);
+  --cm-fg-secondary: var(--cm-gray-700);
+  --cm-muted: var(--cm-gray-600);
+  --cm-subtle: var(--cm-gray-400);
+  --cm-line: #e5e7eb;
+  --cm-divider: #f1f1f3;
+  --cm-accent: var(--cm-brand-500);
+  --cm-accent-hover: var(--cm-brand-600);
+  --cm-accent-press: var(--cm-brand-700);
+  --cm-accent-text: var(--cm-brand-600);
+  --cm-accent-bg: var(--cm-brand-50);
+  --cm-on-accent: var(--cm-white);
+
+  --cm-focus-ring: 0 0 0 3px rgba(229, 57, 53, 0.2);
+  --cm-scrim: rgba(0, 0, 0, 0.4);
+  /* Frosted-glass surface for floating chrome (panels, toolbar, HUD). */
+  --cm-glass: rgba(255, 255, 255, 0.88);
+
+  /* ── radius ───────────────────────────────────────────────────────────── */
+  --cm-radius-sm: 6px;
+  --cm-radius-md: 8px;
+  --cm-radius-lg: 12px;
+  --cm-radius-xl: 16px;
+  --cm-radius-2xl: 20px;
+  --cm-radius-pill: 999px;
+
+  /* ── spacing scale (4px base) ─────────────────────────────────────────── */
+  --cm-space-1: 4px;
+  --cm-space-2: 8px;
+  --cm-space-3: 12px;
+  --cm-space-4: 16px;
+  --cm-space-5: 20px;
+  --cm-space-6: 24px;
+  --cm-space-8: 32px;
+  --cm-space-10: 40px;
+  --cm-space-12: 48px;
+  --cm-space-16: 64px;
+
+  /* ── elevation (two-layer) ────────────────────────────────────────────── */
+  --cm-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --cm-shadow-2: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --cm-shadow-3: 0 2px 4px rgba(0, 0, 0, 0.06), 0 12px 32px rgba(0, 0, 0, 0.12);
+
+  /* ── type ─────────────────────────────────────────────────────────────── */
+  --cm-font-display: -apple-system, "SF Pro Display", "PingFang SC", "Source Han Sans SC", system-ui, sans-serif;
+  --cm-font-sans: -apple-system, "SF Pro Text", "PingFang SC", "Source Han Sans SC", system-ui, sans-serif;
+  --cm-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --cm-weight-regular: 400;
+  --cm-weight-medium: 500;
+  --cm-weight-semibold: 600;
+
+  /* ── z-index scale ────────────────────────────────────────────────────── */
+  --cm-z-floating: 11;
+  --cm-z-menu: 30;
+  --cm-z-overlay: 50;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+.cm-app {
+  position: fixed;
+  inset: 0;
+  background: var(--cm-bg);
+  color: var(--cm-fg);
+  font-family: var(--cm-font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+.cm-main {
+  position: absolute;
+  inset: 0;
+}
+
+/* Canvas is full-screen behind everything; the sidebar + AI panel float over it. */
+.cm-canvasarea {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.cm-canvas-host {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.cm-canvas-host canvas {
+  display: block;
+}
+
+/* ── Topbar (overlay over the canvas) ───────────────────────────────────── */
+.cm-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  /* leave room for the macOS traffic lights on the left */
+  padding: 0 16px 0 92px;
+  user-select: none;
+  z-index: 10;
+  background: linear-gradient(180deg, rgba(250, 250, 250, 0.92), rgba(250, 250, 250, 0));
+}
+
+.cm-topbar__title {
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: -0.02em;
+  color: var(--cm-fg);
+}
+
+.cm-topbar__hint,
+.cm-topbar__folder {
+  color: var(--cm-muted);
+  font-size: 12px;
+}
+
+.cm-topbar__folder {
+  color: var(--cm-fg-secondary);
+}
+
+.cm-topbar__spacer {
+  flex: 1;
+  align-self: stretch;
+}
+
+.cm-topbar__toggle {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-muted);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: var(--cm-radius-sm);
+  line-height: 0;
+  display: grid;
+  place-items: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.cm-topbar__toggle:hover {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-topbar__toggle.is-active {
+  background: var(--cm-accent-bg);
+  color: var(--cm-accent);
+}
+
+/* "重启更新" button — only mounted when there's a pending update ready to
+   install (see UpdateIndicator.tsx). Brand-red pill, white text, sits
+   directly to the left of the settings gear so it's seen the moment the
+   user's eye lands on the top-right cluster. */
+.cm-update-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 6px;
+  padding: 5px 11px;
+  background: var(--cm-accent);
+  color: var(--cm-on-accent);
+  border: none;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+.cm-update-btn:hover:not(:disabled) {
+  background: var(--cm-accent-hover);
+}
+.cm-update-btn:active:not(:disabled) {
+  background: var(--cm-accent-press);
+  transform: translateY(1px);
+}
+.cm-update-btn:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+.cm-update-btn__spin {
+  animation: cm-spin 0.9s linear infinite;
+}
+@keyframes cm-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+/* Base = secondary: white surface, hairline border, dark text. */
+.cm-btn {
+  appearance: none;
+  /* inline-flex so a [icon, text] children pair aligns on center instead of
+     SVG defaulting to baseline (a few px high vs text). 6px gap matches the
+     spacing already implied by every existing icon-button site. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--cm-line);
+  background: var(--cm-surface);
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 7px 12px;
+  border-radius: var(--cm-radius-md);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.cm-btn:hover {
+  background: var(--cm-gray-50);
+  border-color: var(--cm-gray-300);
+}
+.cm-btn:active {
+  background: var(--cm-gray-100);
+}
+.cm-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--cm-focus-ring);
+}
+.cm-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.cm-btn--primary {
+  background: var(--cm-accent);
+  border-color: var(--cm-accent);
+  color: var(--cm-on-accent);
+  font-weight: 600;
+  padding: 9px 16px;
+  font-size: 13px;
+}
+.cm-btn--primary:hover {
+  background: var(--cm-accent-hover);
+  border-color: var(--cm-accent-hover);
+}
+.cm-btn--primary:active {
+  background: var(--cm-accent-press);
+  border-color: var(--cm-accent-press);
+}
+.cm-btn--primary:disabled {
+  background: var(--cm-brand-200);
+  border-color: var(--cm-brand-200);
+}
+
+/* ── Empty state ────────────────────────────────────────────────────────── */
+.cm-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.cm-empty__card {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 420px;
+  text-align: center;
+  padding: 40px 44px;
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-xl);
+  background: var(--cm-surface);
+  box-shadow: var(--cm-shadow-3);
+}
+
+.cm-empty__mark {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--cm-accent);
+}
+
+.cm-empty__lead {
+  margin: 0;
+  color: var(--cm-fg);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.cm-empty__sub {
+  margin: 0;
+  color: var(--cm-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.cm-empty__err {
+  margin: 0;
+  color: var(--cm-danger);
+  font-size: 12px;
+  background: var(--cm-danger-bg);
+  border-radius: var(--cm-radius-sm);
+  padding: 6px 10px;
+}
+
+/* ── HUD (bottom-left stats + undo/redo/minimap) ────────────────────────── */
+.cm-hud {
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--cm-muted);
+  background: var(--cm-glass);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-md);
+  padding: 6px 10px;
+  user-select: none;
+  z-index: 10;
+  backdrop-filter: blur(8px);
+  box-shadow: var(--cm-shadow-1);
+}
+.cm-hud__sel {
+  color: var(--cm-accent);
+  font-weight: 600;
+}
+.cm-hud__btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg-secondary);
+  line-height: 0;
+  cursor: pointer;
+  padding: 3px;
+  border-radius: var(--cm-radius-sm);
+  display: grid;
+  place-items: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.cm-hud__btn:hover:not(:disabled) {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-hud__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.cm-hud__btn.is-active {
+  color: var(--cm-accent);
+  background: var(--cm-accent-bg);
+}
+
+/* ── Chat panel ─────────────────────────────────────────────────────────── */
+/* Floating frosted-glass AI panel (inset card over the full-screen canvas).
+   Glass values match the bottom toolbar. */
+.cm-chat {
+  position: absolute;
+  right: 12px;
+  top: 52px;
+  bottom: 12px;
+  width: 380px;
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-xl);
+  background: var(--cm-glass);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--cm-shadow-3);
+  overflow: hidden;
+}
+
+.cm-chat__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--cm-divider);
+}
+
+/* Agent status capsule (Codex icon + name + status dot). Runtime-agnostic so a
+   future agent just swaps the icon/name. */
+.cm-agent-wrap {
+  position: relative;
+}
+.cm-agent {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 9px 4px 5px;
+  font: inherit;
+  background: var(--cm-gray-100);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-pill);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.cm-agent:hover {
+  background: var(--cm-gray-200);
+}
+.cm-agent__caret {
+  color: var(--cm-muted);
+  flex-shrink: 0;
+}
+.cm-agent__icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.cm-agent__name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--cm-fg);
+}
+.cm-agent__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--cm-gray-400);
+}
+.cm-agent__dot[data-status="ready"] {
+  background: var(--cm-success);
+}
+.cm-agent__dot[data-status="error"] {
+  background: var(--cm-danger);
+}
+.cm-agent__dot[data-status="starting"] {
+  background: var(--cm-warning);
+  animation: cm-pulse 1.4s ease-in-out infinite;
+}
+
+/* Agent status dropdown (drops from the capsule). */
+.cm-agent-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 300px;
+  z-index: var(--cm-z-menu);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  box-shadow: var(--cm-shadow-3);
+}
+.cm-agent-pop__hint {
+  font-size: 12px;
+  color: var(--cm-muted);
+  padding: 4px 0;
+}
+.cm-agent-pop__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.cm-agent-pop__k {
+  color: var(--cm-muted);
+  flex-shrink: 0;
+}
+.cm-agent-pop__v {
+  color: var(--cm-fg);
+  font-family: var(--cm-font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.cm-agent-pop__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cm-fg);
+}
+.cm-agent-pop__quotas {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  margin-top: 2px;
+  border-top: 1px solid var(--cm-line);
+}
+.cm-agent-pop__quota {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+.cm-agent-pop__quotapct {
+  color: var(--cm-fg);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+.cm-agent-pop__quotareset {
+  color: var(--cm-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+.cm-agent-pop__title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cm-fg);
+}
+.cm-agent-pop__desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--cm-muted);
+}
+.cm-agent-pop__step {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cm-agent-pop__steplabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cm-fg-secondary);
+}
+.cm-agent-pop__hint2 {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--cm-muted);
+}
+.cm-agent-pop__cmd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--cm-gray-100);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-sm);
+  padding: 6px 6px 6px 10px;
+}
+.cm-agent-pop__cmd code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--cm-font-mono);
+  font-size: 11px;
+  color: var(--cm-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-agent-pop__cmd button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-muted);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: var(--cm-radius-sm);
+  line-height: 0;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.cm-agent-pop__cmd button:hover {
+  background: var(--cm-gray-200);
+  color: var(--cm-fg);
+}
+.cm-agent-pop__actions {
+  display: flex;
+  gap: 14px;
+}
+.cm-agent-pop__link {
+  appearance: none;
+  border: none;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--cm-accent-text);
+  cursor: pointer;
+  padding: 0;
+}
+.cm-agent-pop__link:hover {
+  text-decoration: underline;
+}
+
+.cm-chat__hspacer {
+  flex: 1;
+}
+
+.cm-chat__messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cm-chat__empty {
+  color: var(--cm-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: auto 0;
+  text-align: center;
+}
+
+.cm-msg {
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: 100%;
+  word-wrap: break-word;
+}
+.cm-msg--user {
+  align-self: flex-end;
+  background: var(--cm-accent);
+  color: var(--cm-on-accent);
+  padding: 8px 12px;
+  border-radius: 14px 14px 4px 14px;
+  max-width: 85%;
+  box-shadow: var(--cm-shadow-1);
+}
+.cm-msg__refcount {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: 4px;
+  vertical-align: middle;
+  opacity: 0.9;
+  font-size: 11px;
+}
+.cm-msg--assistant {
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 95%;
+  color: var(--cm-fg);
+}
+.cm-msg__text {
+  white-space: pre-wrap;
+}
+.cm-msg__pending,
+.cm-msg__err {
+  color: var(--cm-muted);
+  font-size: 12px;
+}
+.cm-msg__err {
+  color: var(--cm-danger);
+}
+
+/* Single-line status rows (think / tool / working) — status dot + label. */
+.cm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  font-family: var(--cm-font-mono);
+  color: var(--cm-muted);
+  min-width: 0;
+}
+.cm-row__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--cm-gray-400);
+}
+.cm-row[data-status="running"] .cm-row__dot {
+  background: var(--cm-success);
+  animation: cm-pulse 1.4s ease-in-out infinite;
+}
+.cm-row[data-status="error"] .cm-row__dot {
+  background: var(--cm-danger);
+}
+.cm-row[data-status="running"] .cm-row__label {
+  color: var(--cm-fg);
+}
+.cm-row[data-status="error"] .cm-row__label {
+  color: var(--cm-danger);
+}
+.cm-row__label {
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-row__detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--cm-subtle);
+}
+@keyframes cm-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cm-row[data-status="running"] .cm-row__dot {
+    animation: none;
+  }
+}
+
+/* Generated-image chip in the assistant stream. */
+.cm-genimg {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--cm-accent-text);
+  background: var(--cm-accent-bg);
+  border: 1px solid var(--cm-brand-100);
+  border-radius: var(--cm-radius-md);
+  padding: 6px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.cm-genimg:hover {
+  background: var(--cm-brand-100);
+  border-color: var(--cm-brand-200);
+}
+.cm-genimg__thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: var(--cm-radius-sm);
+  flex-shrink: 0;
+}
+.cm-genimg__label {
+  font-weight: 500;
+}
+
+/* "Image generating…" pending state — codex fired generationStarted but the
+   imageGenerated hasn't landed yet. Inert (not clickable), muted styling so
+   it reads as a status hint rather than a finished artifact. */
+.cm-genimg--pending {
+  cursor: default;
+  color: var(--cm-muted);
+  background: var(--cm-gray-50);
+  border-style: dashed;
+}
+.cm-genimg--pending:hover {
+  background: var(--cm-gray-50); /* override the default :hover from .cm-genimg */
+}
+.cm-genimg__spin {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--cm-line);
+  border-top-color: var(--cm-accent);
+  animation: cm-spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+
+/* Chat inline image — a path-mention card embedded directly in the AI's text.
+   Renders inline-flex so it sits ON the same line as surrounding words. */
+/* Pending / missing chip — small inline marker while we don't have an image
+   to show yet (or never will, for missing files). */
+.cm-chatimg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+  margin: 0 2px;
+  padding: 3px 8px 3px 4px;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-md);
+  max-width: 100%;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--cm-muted);
+}
+.cm-chatimg__name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+.cm-chatimg__hint {
+  color: var(--cm-muted);
+  font-size: 11px;
+}
+.cm-chatimg__spin {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--cm-line);
+  border-top-color: var(--cm-accent);
+  animation: cm-spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+.cm-chatimg--missing {
+  border-style: dashed;
+}
+.cm-chatimg--missing .cm-chatimg__name {
+  text-decoration: line-through;
+}
+
+/* Resolved thumbnail — render the actual image as a visible preview inline
+   with the chat text. Block-ish so multiple thumbs stack vertically when the
+   AI emits them on consecutive lines (typical case). Right-click brings up
+   the copy / use-as-ref / add-to-canvas / reveal menu. */
+.cm-chatimg-wrap {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 4px 0;
+}
+.cm-chatimg-thumb {
+  display: inline-block;
+  max-width: 260px;
+  border-radius: var(--cm-radius-md);
+  overflow: hidden;
+  border: 1px solid var(--cm-line);
+  background: var(--cm-gray-100);
+  cursor: context-menu;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+  line-height: 0;
+}
+.cm-chatimg-thumb:hover {
+  border-color: var(--cm-gray-300);
+}
+.cm-chatimg-thumb img {
+  display: block;
+  max-width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+}
+.cm-chatimg-thumb__blank {
+  display: block;
+  width: 120px;
+  height: 80px;
+}
+/* Context menu variant for chat images — reuse base .cm-ctx style. */
+.cm-ctx--chatimg {
+  min-width: 168px;
+}
+
+/* Ambient "agent is working" status row. Sits at the bottom of the message
+   list, above the composer. Muted typography so it never competes with the
+   actual chat content but stays visibly present for the entire turn. */
+.cm-streaming-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  /* No horizontal padding — the parent `.cm-chat__messages` already adds
+     16px×14px padding; doubling here pushes us indented relative to the
+     other blocks above. Only a small top gap to breathe off the last block. */
+  padding: 4px 0 0;
+  font-size: 12px;
+  color: var(--cm-muted);
+  user-select: none;
+}
+.cm-streaming-status__spin {
+  animation: cm-spin 0.9s linear infinite;
+  color: var(--cm-muted);
+  flex-shrink: 0;
+}
+.cm-streaming-status__text {
+  /* Subtle fade-in when the phrase swaps. Re-keys via the seed change which
+     re-renders the span; CSS transition smooths the opacity but the text is
+     instant — good-enough animation without measuring text. */
+  transition: opacity 0.18s ease;
+}
+.cm-streaming-status__elapsed {
+  color: var(--cm-muted);
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Warning / error note block in chat. */
+.cm-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--cm-warning);
+  background: var(--cm-warning-bg);
+  border: 1px solid transparent;
+  border-radius: var(--cm-radius-md);
+  padding: 7px 10px;
+}
+.cm-note__ico {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.cm-note--error {
+  color: var(--cm-danger);
+  background: var(--cm-danger-bg);
+}
+
+/* ── Composer ───────────────────────────────────────────────────────────── */
+.cm-composer {
+  border-top: 1px solid var(--cm-divider);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Input box: text area on top, function row (add image + send) below. */
+.cm-composer__box {
+  display: flex;
+  flex-direction: column;
+  background: var(--cm-gray-50);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  padding: 4px;
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.cm-composer__box:focus-within {
+  background: var(--cm-surface);
+  border-color: var(--cm-accent);
+}
+.cm-composer__bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 2px;
+}
+.cm-composer__barspacer {
+  flex: 1;
+}
+.cm-composer__add {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg-secondary);
+  line-height: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--cm-radius-md);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.cm-composer__add:hover {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-composer__add:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Rich contenteditable input with inline reference pills (3 lines → 8 max). */
+.cm-rich {
+  min-height: 66px;
+  max-height: 176px;
+  overflow-y: auto;
+  background: transparent;
+  border: none;
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  padding: 8px 10px 4px;
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cm-rich:empty::before {
+  content: attr(data-placeholder);
+  color: var(--cm-subtle);
+  pointer-events: none;
+}
+
+.cm-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  vertical-align: middle;
+  margin: 0 2px;
+  padding: 2px 7px 2px 3px;
+  border-radius: var(--cm-radius-pill);
+  background: var(--cm-accent);
+  color: var(--cm-on-accent);
+  font-size: 12px;
+  font-weight: 600;
+  user-select: none;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.cm-pill__img {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.cm-pill__label {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Inline variant — pills rendered INSIDE a red user-message bubble. The
+   default red-bg/white-text pill would vanish against the bubble; flip to
+   light bg + accent-color text for contrast. Same image circle + label,
+   smaller padding so it sits naturally inside the line. */
+.cm-pill--inline {
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--cm-accent);
+  padding: 1px 7px 1px 2px;
+  margin: 0 1px;
+  font-weight: 500;
+}
+.cm-pill--inline .cm-pill__img {
+  width: 14px;
+  height: 14px;
+}
+/* Ghost = current canvas selection, not yet committed into the text. */
+.cm-pill--ghost {
+  background: var(--cm-accent-bg);
+  color: var(--cm-accent-text);
+  border: 1px dashed var(--cm-brand-200);
+  opacity: 0.9;
+}
+
+.cm-send {
+  appearance: none;
+  border: none;
+  background: var(--cm-accent);
+  color: var(--cm-on-accent);
+  line-height: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.12s ease, transform 0.08s ease;
+}
+.cm-send:hover:not(:disabled) {
+  background: var(--cm-accent-hover);
+}
+.cm-send:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.cm-send:disabled {
+  background: var(--cm-brand-200);
+  cursor: default;
+}
+.cm-send--stop {
+  background: var(--cm-danger);
+}
+.cm-send--stop:hover {
+  background: var(--cm-danger-strong);
+}
+
+.cm-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.cm-preset {
+  appearance: none;
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 9px;
+  border-radius: var(--cm-radius-sm);
+  border: 1px solid var(--cm-line);
+  background: var(--cm-surface);
+  color: var(--cm-fg-secondary);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.cm-preset:hover:not(:disabled) {
+  background: var(--cm-gray-50);
+  border-color: var(--cm-gray-300);
+}
+.cm-preset:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Tool toolbar (floating, bottom-center) ─────────────────────────────── */
+.cm-toolbar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  background: var(--cm-glass);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  padding: 5px;
+  z-index: 8;
+  backdrop-filter: blur(10px);
+  box-shadow: var(--cm-shadow-2);
+}
+.cm-toolbar__sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 3px;
+  background: var(--cm-line);
+}
+
+/* Mark tool = one button block: icon (activate) + caret (shape picker). */
+.cm-marktool {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 34px;
+  border-radius: var(--cm-radius-md);
+  color: var(--cm-fg-secondary);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.cm-marktool:hover {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-marktool.is-active {
+  background: var(--cm-accent);
+  color: var(--cm-on-accent);
+}
+.cm-marktool__icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  line-height: 0;
+}
+.cm-marktool__caret {
+  width: 14px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  line-height: 0;
+}
+.cm-marktool__menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 8px;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: var(--cm-shadow-2);
+  z-index: var(--cm-z-menu);
+}
+.cm-marktool__opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 12px 6px 8px;
+  border-radius: var(--cm-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cm-marktool__opt:hover {
+  background: var(--cm-gray-100);
+}
+.cm-marktool__opt.is-active {
+  background: var(--cm-accent-bg);
+  color: var(--cm-accent-text);
+}
+.cm-marktool__ico {
+  width: 16px;
+  display: grid;
+  place-items: center;
+  line-height: 0;
+}
+
+.cm-toolbtn {
+  appearance: none;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: var(--cm-radius-md);
+  background: transparent;
+  color: var(--cm-fg-secondary);
+  line-height: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.cm-toolbtn:hover {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-toolbtn.is-active {
+  background: var(--cm-accent);
+  color: var(--cm-on-accent);
+}
+
+/* Filename title over the selected image (DOM overlay, double-click to rename). */
+.cm-img-title {
+  position: absolute;
+  transform: translate(0, calc(-100% - 4px));
+  max-width: 280px;
+  padding: 3px 9px;
+  border-radius: var(--cm-radius-sm);
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--cm-line);
+  color: var(--cm-fg);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+  cursor: text;
+  z-index: 6;
+  backdrop-filter: blur(6px);
+  box-shadow: var(--cm-shadow-1);
+  pointer-events: auto;
+}
+.cm-img-title.editing {
+  outline: none;
+  border-color: var(--cm-accent);
+  background: var(--cm-surface);
+  box-shadow: var(--cm-focus-ring);
+  overflow: visible;
+  text-overflow: clip;
+  user-select: text;
+}
+
+/* Header rate-limit chip. */
+.cm-rl {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cm-muted);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-pill);
+  padding: 2px 8px;
+}
+.cm-rl--hot {
+  color: var(--cm-danger);
+  background: var(--cm-danger-bg);
+  border-color: transparent;
+}
+
+/* Floating todo above the composer (right-aligned, expands upward). */
+.cm-chat__bottom {
+  position: relative;
+}
+.cm-todo {
+  position: absolute;
+  bottom: 100%;
+  right: 12px;
+  margin-bottom: 8px;
+  width: 248px;
+  display: flex;
+  flex-direction: column;
+  z-index: 12;
+}
+.cm-todo__bar {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-end;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cm-fg);
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-pill);
+  padding: 5px 12px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  box-shadow: var(--cm-shadow-1);
+}
+.cm-todo__bar:hover {
+  border-color: var(--cm-gray-300);
+}
+.cm-todo__chev {
+  color: var(--cm-muted);
+  line-height: 0;
+  display: grid;
+  place-items: center;
+}
+.cm-todo__list {
+  list-style: none;
+  margin: 0 0 6px 0;
+  padding: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  box-shadow: var(--cm-shadow-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cm-todo__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--cm-fg);
+}
+.cm-todo__mark {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1.5px solid var(--cm-gray-400);
+}
+.cm-todo__item--completed .cm-todo__mark {
+  background: var(--cm-success);
+  border-color: var(--cm-success);
+}
+.cm-todo__item--completed .cm-todo__text {
+  color: var(--cm-muted);
+  text-decoration: line-through;
+}
+.cm-todo__item--inProgress .cm-todo__mark {
+  border-color: var(--cm-accent);
+  background: var(--cm-accent);
+  animation: cm-pulse 1.4s ease-in-out infinite;
+}
+.cm-todo__item--pending .cm-todo__mark {
+  border-color: var(--cm-gray-400);
+}
+
+/* ── Left sidebar (workspaces) ──────────────────────────────────────────── */
+/* Floating frosted-glass workspace card (mirrors the AI panel on the left). */
+.cm-sidebar {
+  position: absolute;
+  left: 12px;
+  top: 52px;
+  bottom: 12px;
+  width: 232px;
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-xl);
+  background: var(--cm-glass);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--cm-shadow-3);
+  overflow: hidden;
+}
+.cm-sidebar__head {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--cm-muted);
+  padding: 10px 14px 6px;
+}
+.cm-sidebar__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px;
+}
+.cm-sidebar__empty {
+  color: var(--cm-muted);
+  font-size: 12px;
+  padding: 8px 6px;
+}
+.cm-sidebar__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 8px 6px;
+  border-bottom: 1px solid var(--cm-divider);
+}
+.cm-sidebar__action {
+  appearance: none;
+  border: none;
+  background: transparent;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--cm-fg);
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: var(--cm-radius-md);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.cm-sidebar__action svg {
+  color: var(--cm-muted);
+  flex-shrink: 0;
+}
+.cm-sidebar__action:hover {
+  background: var(--cm-gray-100);
+}
+
+.cm-ws {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--cm-radius-md);
+  transition: background 0.12s ease;
+}
+.cm-ws:hover {
+  background: var(--cm-gray-100);
+}
+.cm-ws.is-active {
+  background: var(--cm-accent-bg);
+}
+.cm-ws__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 6px 8px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.cm-ws.is-active .cm-ws__main {
+  color: var(--cm-accent-text);
+  font-weight: 600;
+}
+.cm-ws__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--cm-gray-400);
+}
+.cm-ws__dot[data-kind="app"] {
+  background: var(--cm-accent);
+}
+.cm-ws__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-ws__edit {
+  flex: 1;
+  min-width: 0;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-accent);
+  border-radius: var(--cm-radius-sm);
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 13px;
+  padding: 1px 5px;
+}
+.cm-ws__edit:focus {
+  outline: none;
+  box-shadow: var(--cm-focus-ring);
+}
+.cm-ws__more {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 0;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  border-radius: var(--cm-radius-sm);
+}
+.cm-ws:hover .cm-ws__more {
+  opacity: 1;
+}
+.cm-ws__more:hover {
+  background: var(--cm-gray-200);
+  color: var(--cm-fg);
+}
+.cm-ws__menu {
+  position: absolute;
+  right: 6px;
+  top: 100%;
+  z-index: var(--cm-z-menu);
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-md);
+  padding: 4px;
+  box-shadow: var(--cm-shadow-2);
+}
+.cm-ws__menu button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: var(--cm-radius-sm);
+  white-space: nowrap;
+}
+.cm-ws__menu button svg {
+  color: var(--cm-muted);
+  flex-shrink: 0;
+}
+.cm-ws__menu button:hover {
+  background: var(--cm-gray-100);
+}
+.cm-ws__menu .cm-ws__del:hover {
+  background: var(--cm-danger-bg);
+  color: var(--cm-danger);
+}
+.cm-ws__menu .cm-ws__del:hover svg {
+  color: var(--cm-danger);
+}
+
+/* Session controls (new / history) in chat header. */
+.cm-sessions {
+  position: relative;
+  display: flex;
+  gap: 2px;
+}
+.cm-sessions__btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg-secondary);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--cm-radius-sm);
+  line-height: 0;
+  display: grid;
+  place-items: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.cm-sessions__btn:hover {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-sessions__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.cm-sessions__btn:disabled:hover {
+  background: transparent;
+  color: var(--cm-fg-secondary);
+}
+.cm-sessions__menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 6px;
+  z-index: var(--cm-z-menu);
+  min-width: 200px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  padding: 4px;
+  box-shadow: var(--cm-shadow-2);
+}
+.cm-sessions__empty {
+  color: var(--cm-muted);
+  font-size: 12px;
+  padding: 8px;
+}
+.cm-sessions__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: var(--cm-radius-sm);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-sessions__item:hover {
+  background: var(--cm-gray-100);
+}
+.cm-sessions__item.is-active {
+  background: var(--cm-accent-bg);
+  color: var(--cm-accent-text);
+}
+
+/* Per-image action bar — floats just above the image title. */
+.cm-selbar {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 30px));
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  box-shadow: var(--cm-shadow-2);
+  backdrop-filter: blur(10px);
+  z-index: var(--cm-z-floating);
+  user-select: none;
+  white-space: nowrap;
+}
+.cm-selbar__count {
+  font-size: 11px;
+  color: var(--cm-muted);
+  margin-right: 6px;
+}
+.cm-selbar__btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: var(--cm-radius-sm);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.cm-selbar__btn:hover {
+  background: var(--cm-gray-100);
+}
+.cm-selbar__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.cm-selbar__btn--danger:hover {
+  background: var(--cm-danger-bg);
+  color: var(--cm-danger);
+}
+.cm-selbar__sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 4px;
+  background: var(--cm-line);
+}
+.cm-selbar__more {
+  position: relative;
+  display: flex;
+}
+.cm-selbar__menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: var(--cm-shadow-2);
+  z-index: var(--cm-z-menu);
+  min-width: 140px;
+}
+.cm-selbar__menu button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: var(--cm-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cm-selbar__menu button svg {
+  color: var(--cm-muted);
+  flex-shrink: 0;
+}
+.cm-selbar__menu .cm-selbar__del:hover svg {
+  color: var(--cm-danger);
+}
+.cm-selbar__menu button:hover {
+  background: var(--cm-gray-100);
+}
+.cm-selbar__menu .cm-selbar__del {
+  margin-top: 2px;
+  border-top: 1px solid var(--cm-divider);
+}
+.cm-selbar__menu .cm-selbar__del:hover {
+  background: var(--cm-danger-bg);
+  color: var(--cm-danger);
+}
+
+/* ── Compare overlay (before/after slider + side-by-side) ───────────────── */
+.cm-compare {
+  position: absolute;
+  inset: 0;
+  z-index: var(--cm-z-overlay);
+  background: rgba(245, 245, 247, 0.92);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  padding: 48px;
+}
+.cm-compare__close {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  appearance: none;
+  border: 1px solid var(--cm-line);
+  background: var(--cm-surface);
+  color: var(--cm-fg);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--cm-radius-md);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  line-height: 0;
+  box-shadow: var(--cm-shadow-1);
+  transition: background 0.12s ease;
+}
+.cm-compare__close:hover {
+  background: var(--cm-gray-100);
+}
+
+/* Side-by-side */
+.cm-compare__side {
+  display: flex;
+  gap: 16px;
+  max-width: 100%;
+  max-height: 100%;
+}
+.cm-compare__fig {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+.cm-compare__fig img {
+  max-width: 44vw;
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: var(--cm-radius-md);
+  border: 1px solid var(--cm-line);
+  background: var(--cm-surface);
+  box-shadow: var(--cm-shadow-2);
+}
+.cm-compare__fig figcaption {
+  font-size: 12px;
+  color: var(--cm-fg-secondary);
+}
+
+/* Before/after slider */
+.cm-compare__slider {
+  position: relative;
+  max-width: 88vw;
+  max-height: 84vh;
+  cursor: ew-resize;
+  user-select: none;
+  line-height: 0;
+  border-radius: var(--cm-radius-md);
+  box-shadow: var(--cm-shadow-2);
+}
+.cm-compare__img {
+  display: block;
+  max-width: 88vw;
+  max-height: 84vh;
+  object-fit: contain;
+  border-radius: var(--cm-radius-md);
+}
+.cm-compare__img--top {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.cm-compare__divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--cm-accent);
+  transform: translateX(-1px);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9);
+  pointer-events: none;
+}
+.cm-compare__lbl {
+  position: absolute;
+  top: 10px;
+  font-size: 11px;
+  color: var(--cm-on-accent);
+  background: rgba(26, 26, 28, 0.7);
+  padding: 3px 8px;
+  border-radius: var(--cm-radius-pill);
+  pointer-events: none;
+}
+.cm-compare__lbl--l {
+  left: 10px;
+}
+.cm-compare__lbl--r {
+  right: 10px;
+}
+
+/* Mark comment pin — type the per-mark instruction next to the mark. */
+.cm-mark-comment {
+  position: absolute;
+  z-index: 15;
+  width: 220px;
+  resize: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--cm-fg);
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-accent);
+  border-radius: var(--cm-radius-lg);
+  padding: 8px 10px;
+  box-shadow: var(--cm-shadow-3), var(--cm-focus-ring);
+  outline: none;
+}
+.cm-mark-comment::placeholder {
+  color: var(--cm-subtle);
+}
+
+/* "本轮标注" staging area above the composer. */
+.cm-staging {
+  border-top: 1px solid var(--cm-divider);
+  padding: 8px 10px;
+  max-height: 168px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--cm-accent-bg);
+}
+.cm-staging__head {
+  font-size: 11px;
+  color: var(--cm-accent-text);
+  font-weight: 600;
+}
+.cm-staging__row {
+  display: flex;
+  gap: 8px;
+}
+.cm-staging__thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: var(--cm-radius-sm);
+  flex-shrink: 0;
+  border: 1px solid var(--cm-line);
+}
+.cm-staging__marks {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cm-staging__mark {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.cm-staging__num {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--cm-accent);
+  color: var(--cm-on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.cm-staging__note {
+  flex: 1;
+  color: var(--cm-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+.cm-staging__note--empty {
+  color: var(--cm-muted);
+  font-style: italic;
+}
+.cm-staging__edit {
+  flex: 1;
+  min-width: 0;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-accent);
+  border-radius: var(--cm-radius-sm);
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 6px;
+  outline: none;
+}
+.cm-staging__x {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-muted);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: var(--cm-radius-sm);
+  flex-shrink: 0;
+  line-height: 0;
+  display: grid;
+  place-items: center;
+}
+.cm-staging__x:hover {
+  background: var(--cm-danger-bg);
+  color: var(--cm-danger);
+}
+
+/* ── In-place crop (frame on the image + panel to its right) ────────────── */
+.cm-cropip {
+  position: absolute; /* left/top/width/height set by the scene per frame */
+  z-index: 12;
+}
+.cm-cropip__area {
+  position: absolute;
+  inset: 0;
+  overflow: hidden; /* clip the dim to the image area */
+}
+.cm-cropip__frame {
+  position: absolute;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+  box-sizing: border-box;
+  cursor: move;
+}
+.cm-cropip__h {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: #fff;
+  border: 1.5px solid var(--cm-accent);
+  border-radius: 50%;
+  box-shadow: var(--cm-shadow-1);
+}
+.cm-cropip__h--tl {
+  left: -7px;
+  top: -7px;
+  cursor: nwse-resize;
+}
+.cm-cropip__h--tr {
+  right: -7px;
+  top: -7px;
+  cursor: nesw-resize;
+}
+.cm-cropip__h--br {
+  right: -7px;
+  bottom: -7px;
+  cursor: nwse-resize;
+}
+.cm-cropip__h--bl {
+  left: -7px;
+  bottom: -7px;
+  cursor: nesw-resize;
+}
+.cm-cropip__panel {
+  position: absolute;
+  left: calc(100% + 14px);
+  top: 0;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  padding: 16px;
+  box-shadow: var(--cm-shadow-3);
+}
+.cm-cropip__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--cm-fg);
+}
+.cm-cropip__dim {
+  font-size: 13px;
+  color: var(--cm-muted);
+  font-variant-numeric: tabular-nums;
+}
+.cm-cropip__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cm-cropip__preset {
+  appearance: none;
+  border: 1px solid var(--cm-line);
+  background: var(--cm-surface);
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: var(--cm-radius-sm);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.cm-cropip__preset:hover {
+  background: var(--cm-gray-50);
+  border-color: var(--cm-gray-300);
+}
+.cm-cropip__actions {
+  display: flex;
+  gap: 8px;
+}
+.cm-cropip__actions .cm-btn {
+  flex: 1;
+  text-align: center;
+}
+
+/* ── Settings modal (DESIGN.md §10.7 modal + §10.2 inputs + §10.3 toggle) ──── */
+.cm-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--cm-scrim);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  padding: 48px 24px;
+}
+.cm-modal {
+  width: 100%;
+  max-width: 460px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-xl);
+  box-shadow: var(--cm-shadow-3);
+  overflow: hidden;
+}
+.cm-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--cm-divider);
+}
+.cm-modal__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--cm-fg);
+}
+.cm-modal__close {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-muted);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: var(--cm-radius-sm);
+  line-height: 0;
+  display: grid;
+  place-items: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.cm-modal__close:hover {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-modal__body {
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.cm-set-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Section head: title + (optional) master toggle on the same row. */
+.cm-set-section__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 24px;
+}
+.cm-set-section__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--cm-fg);
+}
+.cm-set-section__desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--cm-muted);
+}
+/* Grouping card for a section's controls (one or more rows). */
+.cm-set-card {
+  display: flex;
+  flex-direction: column;
+  margin-top: 2px;
+  padding: 0 16px;
+  background: var(--cm-gray-50);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+}
+.cm-set-card .cm-set-row + .cm-set-row {
+  border-top: 1px solid var(--cm-divider);
+}
+.cm-set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+}
+.cm-set-row__label {
+  font-size: 14px;
+  color: var(--cm-fg-secondary);
+}
+/* Combined host : port endpoint. */
+.cm-set-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cm-set-endpoint__colon {
+  color: var(--cm-muted);
+}
+.cm-input--host {
+  width: 150px;
+}
+/* A standalone action button inside a section (e.g. open log folder). */
+.cm-set-action {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.cm-set-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--cm-muted);
+}
+.cm-set-hint--err {
+  color: var(--cm-danger);
+}
+.cm-code {
+  font-family: var(--cm-font-mono);
+  font-size: 12px;
+  background: var(--cm-gray-100);
+  border: 1px solid var(--cm-line);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* Inputs / select (§10.2) */
+.cm-input,
+.cm-select {
+  appearance: none;
+  font: inherit;
+  font-size: 14px;
+  color: var(--cm-fg);
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-gray-300);
+  border-radius: var(--cm-radius-sm);
+  padding: 0 12px;
+  height: 36px;
+  min-width: 0;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+/* Strip the native number spinner — a clean numeric field reads better than
+   macOS's tiny stepper arrows (DESIGN §10.2). */
+.cm-input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.cm-input[type="number"]::-webkit-outer-spin-button,
+.cm-input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.cm-input {
+  width: 180px;
+}
+.cm-input--port {
+  width: 96px;
+}
+.cm-input::placeholder {
+  color: var(--cm-subtle);
+}
+.cm-input:focus,
+.cm-select:focus {
+  outline: none;
+  border-color: var(--cm-accent);
+  box-shadow: var(--cm-focus-ring);
+}
+.cm-input:disabled,
+.cm-select:disabled {
+  background: var(--cm-gray-100);
+  color: var(--cm-subtle);
+  cursor: default;
+}
+.cm-input.is-invalid {
+  border-color: var(--cm-danger);
+}
+.cm-input.is-invalid:focus {
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.18);
+}
+.cm-select {
+  width: 140px;
+  cursor: pointer;
+  /* room for a chevron glyph */
+  background-image: linear-gradient(45deg, transparent 50%, var(--cm-muted) 50%),
+    linear-gradient(135deg, var(--cm-muted) 50%, transparent 50%);
+  background-position: calc(100% - 16px) center, calc(100% - 11px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px;
+}
+
+/* Toggle switch (§10.3) */
+.cm-toggle {
+  appearance: none;
+  border: none;
+  flex-shrink: 0;
+  width: 40px;
+  height: 22px;
+  border-radius: var(--cm-radius-pill);
+  background: var(--cm-gray-300);
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  transition: background 0.16s ease;
+}
+.cm-toggle.is-on {
+  background: var(--cm-accent);
+}
+.cm-toggle__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--cm-white);
+  box-shadow: var(--cm-shadow-1);
+  transition: transform 0.16s ease;
+}
+.cm-toggle.is-on .cm-toggle__knob {
+  transform: translateX(18px);
+}
+.cm-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--cm-focus-ring);
+}
+
+/* ── Instant hover tooltip (toolbar etc.) — dark chip above the element ────── */
+[data-tip] {
+  position: relative;
+}
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  background: var(--cm-gray-800);
+  color: var(--cm-white);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: var(--cm-radius-sm);
+  box-shadow: var(--cm-shadow-2);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: var(--cm-z-menu);
+}
+[data-tip]:hover::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* ── Canvas right-click context menu ──────────────────────────────────────── */
+.cm-ctx {
+  position: fixed;
+  z-index: 2000;
+  min-width: 184px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  box-shadow: var(--cm-shadow-3);
+}
+.cm-ctx__item {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: var(--cm-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cm-ctx__item svg {
+  color: var(--cm-muted);
+  flex-shrink: 0;
+}
+.cm-ctx__item:hover:not(:disabled) {
+  background: var(--cm-gray-100);
+}
+.cm-ctx__item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.cm-ctx__item--danger:hover:not(:disabled) {
+  background: var(--cm-danger-bg);
+  color: var(--cm-danger);
+}
+.cm-ctx__item--danger:hover:not(:disabled) svg {
+  color: var(--cm-danger);
+}
+.cm-ctx__sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--cm-divider);
+}
+
+/* ───────────────────── Settings — Cloud & Privacy ───────────────────── */
+.cm-set-row--actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+.cm-device-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--cm-muted);
+  background: var(--cm-gray-50);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-sm);
+  padding: 2px 6px;
+  user-select: text;
+}
+
+/* ───────────────────── Composer — Gallery entry ───────────────────── */
+.cm-composer__topbar {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 6px;
+  pointer-events: auto;
+}
+.cm-gallery-trigger {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--cm-fg-secondary);
+  background: var(--cm-glass);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-md);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.cm-gallery-trigger:hover {
+  color: var(--cm-accent);
+  border-color: var(--cm-brand-200);
+  background: var(--cm-accent-bg);
+}
+.cm-gallery-trigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--cm-brand-100);
+}
+
+/* ───────────────────── Gallery — overlay ───────────────────── */
+.cm-gallery-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(245, 245, 247, 0.72);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  display: grid;
+  place-items: stretch;
+  padding: 48px 32px;
+}
+.cm-gallery {
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-xl);
+  box-shadow: var(--cm-shadow-3);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  overflow: hidden;
+}
+.cm-gallery__head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--cm-divider);
+  flex-shrink: 0;
+}
+.cm-gallery__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--cm-fg);
+  flex-shrink: 0;
+}
+.cm-gallery__close {
+  margin-left: auto;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-muted);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: var(--cm-radius-sm);
+  line-height: 0;
+  display: grid;
+  place-items: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.cm-gallery__close:hover {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+/* Filter chip row: single non-wrapping line. Overflow collapses into the
+   "More" dropdown — see GalleryOverlay.tsx CategoryChips. */
+.cm-gallery__filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--cm-divider);
+  flex-shrink: 0;
+  position: relative;
+  min-width: 0;
+}
+.cm-gallery__chip {
+  appearance: none;
+  background: transparent;
+  color: var(--cm-fg-secondary);
+  border: 1px solid var(--cm-line);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cm-gallery__chip:hover {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-gallery__chip.is-on {
+  background: var(--cm-accent-bg);
+  color: var(--cm-accent);
+  border-color: var(--cm-brand-200);
+}
+.cm-gallery__chip--more { padding-right: 10px; }
+.cm-gallery__caret {
+  font-size: 9px;
+  color: var(--cm-muted);
+  transition: transform 0.15s ease;
+}
+.cm-gallery__chip--more.is-open .cm-gallery__caret { transform: rotate(180deg); }
+.cm-gallery__more { position: relative; }
+.cm-gallery__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-md);
+  box-shadow: var(--cm-shadow-3);
+  padding: 4px;
+  min-width: 180px;
+  max-height: 60vh;
+  overflow-y: auto;
+  z-index: 90;
+}
+.cm-gallery__menuitem {
+  appearance: none;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 6px 12px;
+  border-radius: var(--cm-radius-sm);
+  font-size: 12px;
+  color: var(--cm-fg-secondary);
+  cursor: pointer;
+}
+.cm-gallery__menuitem:hover {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-gallery__menuitem.is-on {
+  background: var(--cm-accent-bg);
+  color: var(--cm-accent);
+}
+/* Offscreen measuring row — used by JS to compute which chips fit before
+   committing to the visible/overflow split. */
+.cm-gallery__measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  left: 20px;
+  right: 20px;
+  top: 0;
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+.cm-gallery__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  position: relative;
+}
+/* True masonry: N independent flex columns. JS distributes cards by
+   greedy-shortest-column on insert (see GalleryOverlay.tsx). CSS
+   `column-count` was reshuffling every card on infinite-scroll append. */
+.cm-gallery__masonry {
+  display: grid;
+  gap: 14px;
+}
+.cm-gallery__col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.cm-gallery__empty,
+.cm-gallery__loading {
+  text-align: center;
+  color: var(--cm-muted);
+  font-size: 13px;
+  padding: 32px 0;
+}
+.cm-gallery__error {
+  text-align: center;
+  color: var(--cm-fg-secondary);
+  padding: 48px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.cm-gallery__sentinel {
+  height: 1px;
+}
+
+/* ───────────────────── Gallery — card ───────────────────── */
+.cm-gcard {
+  appearance: none;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  border-radius: var(--cm-radius-lg);
+  overflow: hidden;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.cm-gcard:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--cm-shadow-2);
+}
+.cm-gcard__media {
+  position: relative;
+  background: var(--cm-gray-100);
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--cm-radius-lg);
+}
+.cm-gcard__media img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+.cm-gcard__noimg {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, var(--cm-gray-100), var(--cm-gray-50));
+}
+.cm-gcard__badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--cm-danger);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+.cm-gcard__meta {
+  padding: 8px 4px 0;
+}
+.cm-gcard__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cm-fg);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ───────────────────── Gallery — detail modal ───────────────────── */
+.cm-gdetail-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  display: grid;
+  place-items: center;
+  padding: 32px 24px;
+}
+.cm-gdetail {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 1fr);
+  width: 100%;
+  max-width: 1100px;
+  max-height: 100%;
+  background: var(--cm-surface);
+  border-radius: var(--cm-radius-xl);
+  box-shadow: var(--cm-shadow-3);
+  overflow: hidden;
+}
+@media (max-width: 880px) {
+  .cm-gdetail { grid-template-columns: 1fr; max-height: 100% }
+}
+.cm-gdetail__close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 1;
+  appearance: none;
+  border: none;
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--cm-fg-secondary);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 50%;
+  line-height: 0;
+  display: grid;
+  place-items: center;
+  transition: background 0.12s ease, color 0.12s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.cm-gdetail__close:hover {
+  background: #fff;
+  color: var(--cm-fg);
+}
+.cm-gdetail__media {
+  background: var(--cm-gray-100);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  max-height: 80vh;
+}
+.cm-gdetail__media img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.cm-gdetail__body {
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.cm-gdetail__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--cm-fg);
+  letter-spacing: -0.01em;
+}
+.cm-gdetail__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.cm-gdetail__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--cm-fg-secondary);
+  background: var(--cm-gray-100);
+  border-radius: 999px;
+}
+.cm-gdetail__tag--uc {
+  background: var(--cm-accent-bg);
+  color: var(--cm-accent);
+}
+.cm-gdetail__tag--warn {
+  background: var(--cm-danger-bg);
+  color: var(--cm-danger);
+}
+.cm-gdetail__prompt {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--cm-fg);
+  background: var(--cm-gray-50);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-md);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.cm-gdetail__source {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--cm-muted);
+}
+.cm-gdetail__sourcerow {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+}
+.cm-gdetail__sourcerow dt {
+  color: var(--cm-muted);
+}
+.cm-gdetail__sourcerow dd {
+  margin: 0;
+  min-width: 0;
+}
+.cm-gdetail__sourcelink {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--cm-accent);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: inherit;
+  text-align: left;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-gdetail__sourcelink:hover {
+  text-decoration: underline;
+}
+.cm-gdetail__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--cm-divider);
+}
+.cm-gdetail__error {
+  grid-column: 1 / -1;
+  padding: 48px;
+  text-align: center;
+  color: var(--cm-fg-secondary);
+}

@@ -1,0 +1,85 @@
+[package]
+name = "cameo"
+version = "0.1.0"
+description = "An image-first canvas for your local Codex agent."
+authors = ["Ethan L <myagents.io@gmail.com>"]
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/hAcKlyc/cameo"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "cameo_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Util
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tracing-appender = "0.2"
+
+# Hashing & ids (content-addressed Assets)
+blake3 = "1"
+nanoid = "0.4"
+uuid = { version = "1", features = ["v4"] }
+
+# File system
+notify = "6"
+notify-debouncer-mini = "0.4"
+dirs = "5"
+which = "6"
+mime_guess = "2"
+
+# Image decode / downscale / thumbnails
+image = "0.25"
+
+# Decode Codex base64 image fallback (imageGeneration `result`)
+base64 = "0.22"
+
+# Clipboard (copy image out)
+arboard = "3"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Concurrency
+once_cell = "1"
+parking_lot = "0.12"
+
+# Regex (ANSI strip on agent stderr)
+regex = "1"
+
+# URL decoding for macOS Opened-with-URL handler
+urlencoding = "2"
+
+# Unix process group (POSIX only) — tree-kill discipline for the Codex sidecar
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal", "process"] }
+libc = "0.2"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+tempfile = "3"
