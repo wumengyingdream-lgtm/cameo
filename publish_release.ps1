@@ -155,11 +155,18 @@ if ($DryRun) { Ok "DRY RUN - no upload performed."; exit 0 }
 $yn = Read-Host "Proceed with upload? [y/N]"
 if ($yn -notmatch '^[Yy]$') { Warn "aborted by user"; exit 0 }
 
-$rcloneBase = ":s3,provider=Cloudflare,access_key_id=$($env:R2_ACCESS_KEY_ID),secret_access_key=$($env:R2_SECRET_ACCESS_KEY),endpoint=$($env:R2_ENDPOINT),region=auto:"
+# Configure rclone's ad-hoc `:s3:` backend via env vars. Do NOT use an inline
+# connection string (`:s3,endpoint=…:`) — R2_ENDPOINT contains "://" and rclone
+# truncates an unquoted value at the first colon, yielding endpoint="https".
+$env:RCLONE_S3_PROVIDER          = "Cloudflare"
+$env:RCLONE_S3_ACCESS_KEY_ID     = $env:R2_ACCESS_KEY_ID
+$env:RCLONE_S3_SECRET_ACCESS_KEY = $env:R2_SECRET_ACCESS_KEY
+$env:RCLONE_S3_ENDPOINT          = $env:R2_ENDPOINT
+$env:RCLONE_S3_REGION            = "auto"
 $emptyConf = New-TemporaryFile
 try {
   foreach ($u in $uploads) {
-    $remote = "$rcloneBase$($env:R2_BUCKET)/$($u.Dst)"
+    $remote = ":s3:$($env:R2_BUCKET)/$($u.Dst)"
     Info "rclone copyto $(Split-Path $u.Src -Leaf) -> r2:$($env:R2_BUCKET)/$($u.Dst)"
     & rclone --config $emptyConf.FullName copyto $u.Src $remote
     if ($LASTEXITCODE -ne 0) { Die "rclone upload failed for $($u.Src)" }

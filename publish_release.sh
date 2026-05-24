@@ -189,12 +189,19 @@ fi
 read -r -p "Proceed with upload? [y/N] " yn
 [[ "$yn" =~ ^[Yy]$ ]] || { warn "aborted by user"; exit 0; }
 
-RCLONE_BASE=":s3,provider=Cloudflare,access_key_id=${R2_ACCESS_KEY_ID},secret_access_key=${R2_SECRET_ACCESS_KEY},endpoint=${R2_ENDPOINT},region=auto:"
+# Configure rclone's ad-hoc `:s3:` backend via env vars. Do NOT use an inline
+# connection string (`:s3,endpoint=…:`) — R2_ENDPOINT contains "://" and rclone
+# truncates an unquoted value at the first colon, yielding endpoint="https".
+export RCLONE_S3_PROVIDER="Cloudflare"
+export RCLONE_S3_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+export RCLONE_S3_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+export RCLONE_S3_ENDPOINT="$R2_ENDPOINT"
+export RCLONE_S3_REGION="auto"
 
 for entry in "${UPLOADS[@]}"; do
   IFS="|" read -r SRC DST <<< "$entry"
   info "rclone copyto $(basename "$SRC") → r2:$R2_BUCKET/$DST"
-  rclone --config /dev/null copyto "$SRC" "${RCLONE_BASE}${R2_BUCKET}/${DST}"
+  rclone --config /dev/null copyto "$SRC" ":s3:${R2_BUCKET}/${DST}"
 done
 
 echo ""
