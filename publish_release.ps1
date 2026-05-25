@@ -41,6 +41,19 @@ function Format-Size($path) {
   if ($bytes -ge 1KB) { return "{0:N1} KB" -f ($bytes / 1KB) }
   return "$bytes B"
 }
+function Resolve-LocalCommand($name) {
+  $cmd = Get-Command $name -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+
+  foreach ($candidate in @(
+    (Join-Path $PSScriptRoot "$name.exe"),
+    (Join-Path $PSScriptRoot $name)
+  )) {
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+  }
+
+  return $null
+}
 
 $Target = 'x86_64-pc-windows-msvc'
 
@@ -66,9 +79,9 @@ foreach ($v in 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_ENDPOINT', 'R2_BU
 if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
   Warn "TAURI_SIGNING_PRIVATE_KEY not set - manifest will reference an unsigned payload (clients will refuse it)"
 }
-if (-not (Get-Command rclone -ErrorAction SilentlyContinue)) {
-  Die "rclone not on PATH - install from https://rclone.org/downloads/"
-}
+$Rclone = Resolve-LocalCommand 'rclone'
+if (-not $Rclone) { Die "rclone not found - install it or place rclone.exe in the project root" }
+Ok "rclone: $Rclone"
 
 # -- version -----------------------------------------------------------------
 $Version = (Get-Content (Join-Path $PSScriptRoot 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json).version
@@ -209,7 +222,7 @@ try {
   foreach ($u in $uploads) {
     $remote = ":s3:$($env:R2_BUCKET)/$($u.Dst)"
     Info "rclone copyto $(Split-Path $u.Src -Leaf) -> r2:$($env:R2_BUCKET)/$($u.Dst)"
-    & rclone --config $emptyConf.FullName --progress --stats=1s copyto $u.Src $remote
+    & $Rclone --config $emptyConf.FullName --progress --stats=1s copyto $u.Src $remote
     if ($LASTEXITCODE -ne 0) { Die "rclone upload failed for $($u.Src)" }
   }
 } finally { Remove-Item $emptyConf.FullName -ErrorAction SilentlyContinue }
