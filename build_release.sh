@@ -36,6 +36,7 @@ info() { printf '→ %s\n' "$*"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$*"; }
 die()  { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
+size_of() { ls -lh "$1" | awk '{print $5}'; }
 
 [[ "$(uname -s)" == "Darwin" ]] || die "this script is for macOS — on Windows run build_release.ps1"
 
@@ -162,8 +163,17 @@ echo ""
 ok "built in $(( $(date +%s) - start_ts ))s"
 echo ""
 echo "  ┌─ release artifact(s) ────────────────────────────────────"
-for d in "${dmgs[@]}"; do echo "     dmg     : $ROOT/$d"; done
-for t in "${tarballs[@]}"; do echo "     update  : $ROOT/$t"; echo "             : $ROOT/$t.sig"; done
+for d in "${dmgs[@]}"; do
+  printf '     dmg     : %s (%s)\n' "$ROOT/$d" "$(size_of "$d")"
+done
+for t in "${tarballs[@]}"; do
+  printf '     update  : %s (%s)\n' "$ROOT/$t" "$(size_of "$t")"
+  if [[ -f "$t.sig" ]]; then
+    printf '             : %s (%s)\n' "$ROOT/$t.sig" "$(size_of "$t.sig")"
+  else
+    printf '             : %s\n' "$ROOT/$t.sig"
+  fi
+done
 echo "  └───────────────────────────────────────────────────────────"
 echo ""
 

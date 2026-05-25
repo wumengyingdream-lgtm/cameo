@@ -34,6 +34,13 @@ function Info($m) { Write-Host "-> $m" }
 function Ok($m)   { Write-Host "  [ok] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "  [!] $m"  -ForegroundColor Yellow }
 function Die($m)  { Write-Host "  [x] $m"  -ForegroundColor Red; exit 1 }
+function Format-Size($path) {
+  $bytes = (Get-Item -LiteralPath $path).Length
+  if ($bytes -ge 1GB) { return "{0:N1} GB" -f ($bytes / 1GB) }
+  if ($bytes -ge 1MB) { return "{0:N1} MB" -f ($bytes / 1MB) }
+  if ($bytes -ge 1KB) { return "{0:N1} KB" -f ($bytes / 1KB) }
+  return "$bytes B"
+}
 
 $Target = 'x86_64-pc-windows-msvc'
 
@@ -170,14 +177,14 @@ if ($uploads.Count -eq 0) { Die "no artifacts to upload - did you run .\build_re
 Write-Host ""
 Info "preparing to upload $($uploads.Count) file(s) to R2 bucket '$($env:R2_BUCKET)':"
 foreach ($u in $uploads) {
-  Write-Host "    $(Split-Path $u.Src -Leaf)"
+  Write-Host "    $(Split-Path $u.Src -Leaf) ($(Format-Size $u.Src))"
   Write-Host "         -> r2:$($env:R2_BUCKET)/$($u.Dst)"
 }
 Write-Host ""
 
 if ($ghFiles.Count -gt 0) {
   Info "GitHub release v$Version will receive $($ghFiles.Count) asset(s):"
-  foreach ($f in $ghFiles) { Write-Host "    $(Split-Path $f -Leaf)" }
+  foreach ($f in $ghFiles) { Write-Host "    $(Split-Path $f -Leaf) ($(Format-Size $f))" }
   Write-Host ""
 }
 
@@ -202,7 +209,7 @@ try {
   foreach ($u in $uploads) {
     $remote = ":s3:$($env:R2_BUCKET)/$($u.Dst)"
     Info "rclone copyto $(Split-Path $u.Src -Leaf) -> r2:$($env:R2_BUCKET)/$($u.Dst)"
-    & rclone --config $emptyConf.FullName copyto $u.Src $remote
+    & rclone --config $emptyConf.FullName --progress --stats=1s copyto $u.Src $remote
     if ($LASTEXITCODE -ne 0) { Die "rclone upload failed for $($u.Src)" }
   }
 } finally { Remove-Item $emptyConf.FullName -ErrorAction SilentlyContinue }
@@ -229,6 +236,7 @@ if ((Get-Command gh -ErrorAction SilentlyContinue) -and $ghFiles.Count -gt 0) {
   else { Ok "tag $tag already exists" }
   & gh release view $tag *> $null
   if ($LASTEXITCODE -ne 0) { & gh release create $tag --title "Cameo $tag" --notes "$Notes" --verify-tag; Ok "created GitHub release $tag" }
+  Info "uploading $($ghFiles.Count) GitHub release asset(s) - this may take a while"
   & gh release upload $tag @ghFiles --clobber
   if ($LASTEXITCODE -eq 0) { Ok "uploaded $($ghFiles.Count) asset(s) -> download links live at cameo.ink" }
   Write-Host ""

@@ -27,6 +27,13 @@ function Info($m) { Write-Host "-> $m" }
 function Ok($m)   { Write-Host "  [ok] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "  [!] $m"  -ForegroundColor Yellow }
 function Die($m)  { Write-Host "  [x] $m"  -ForegroundColor Red; exit 1 }
+function Format-Size($path) {
+  $bytes = (Get-Item -LiteralPath $path).Length
+  if ($bytes -ge 1GB) { return "{0:N1} GB" -f ($bytes / 1GB) }
+  if ($bytes -ge 1MB) { return "{0:N1} MB" -f ($bytes / 1MB) }
+  if ($bytes -ge 1KB) { return "{0:N1} KB" -f ($bytes / 1KB) }
+  return "$bytes B"
+}
 
 $Target = 'x86_64-pc-windows-msvc'
 
@@ -137,10 +144,10 @@ Write-Host ""
 Ok "built in ${secs}s"
 Write-Host ""
 Write-Host "  +- release artifacts ---------------------------------------"
-Write-Host "     installer : $($installer.FullName)"
+Write-Host "     installer : $($installer.FullName) ($(Format-Size $installer.FullName))"
 if ($updaterZip) {
-  Write-Host "     update    : $($updaterZip.FullName)"
-  if ($updaterSig) { Write-Host "               : $($updaterSig.FullName)" }
+  Write-Host "     update    : $($updaterZip.FullName) ($(Format-Size $updaterZip.FullName))"
+  if ($updaterSig) { Write-Host "               : $($updaterSig.FullName) ($(Format-Size $updaterSig.FullName))" }
   else { Warn "no .nsis.zip.sig - set TAURI_SIGNING_PRIVATE_KEY and re-run for auto-update support" }
 } else {
   Warn "no .nsis.zip updater payload produced"

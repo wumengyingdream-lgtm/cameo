@@ -35,6 +35,7 @@ info() { printf '→ %s\n' "$*"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$*"; }
 die()  { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
+size_of() { ls -lh "$1" | awk '{print $5}'; }
 
 [[ "$(uname -s)" == "Darwin" ]] || die "macOS only — on Windows run publish_release.ps1"
 
@@ -208,13 +209,13 @@ echo ""
 info "preparing to upload ${#UPLOADS[@]} file(s) to R2 bucket '$R2_BUCKET':"
 for entry in "${UPLOADS[@]}"; do
   IFS="|" read -r SRC DST <<< "$entry"
-  printf '    %s\n         → r2:%s/%s\n' "$(basename "$SRC")" "$R2_BUCKET" "$DST"
+  printf '    %s (%s)\n         → r2:%s/%s\n' "$(basename "$SRC")" "$(size_of "$SRC")" "$R2_BUCKET" "$DST"
 done
 echo ""
 
 if [[ ${#GH_FILES[@]} -gt 0 ]]; then
   info "GitHub release v${VERSION} will receive ${#GH_FILES[@]} asset(s):"
-  for f in "${GH_FILES[@]}"; do printf '    %s\n' "$(basename "$f")"; done
+  for f in "${GH_FILES[@]}"; do printf '    %s (%s)\n' "$(basename "$f")" "$(size_of "$f")"; done
   echo ""
 fi
 
@@ -241,7 +242,7 @@ export RCLONE_S3_NO_CHECK_BUCKET="true"
 for entry in "${UPLOADS[@]}"; do
   IFS="|" read -r SRC DST <<< "$entry"
   info "rclone copyto $(basename "$SRC") → r2:$R2_BUCKET/$DST"
-  rclone --config /dev/null copyto "$SRC" ":s3:${R2_BUCKET}/${DST}"
+  rclone --config /dev/null --progress --stats=1s copyto "$SRC" ":s3:${R2_BUCKET}/${DST}"
 done
 
 echo ""
@@ -273,6 +274,7 @@ if command -v gh >/dev/null 2>&1 && [[ ${#GH_FILES[@]} -gt 0 ]]; then
   if ! gh release view "$TAG" >/dev/null 2>&1; then
     gh release create "$TAG" --title "Cameo $TAG" --notes "$NOTES" --verify-tag && ok "created GitHub release $TAG"
   fi
+  info "uploading ${#GH_FILES[@]} GitHub release asset(s) — this may take a while"
   gh release upload "$TAG" "${GH_FILES[@]}" --clobber \
     && ok "uploaded ${#GH_FILES[@]} asset(s) → download links live at cameo.ink"
   echo ""
