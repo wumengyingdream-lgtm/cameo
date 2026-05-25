@@ -37,7 +37,11 @@ try {
 } catch {}
 Start-Sleep -Milliseconds 500
 
-if (-not (Test-Path node_modules)) { Info "pnpm install (first run)"; pnpm install }
+if (-not (Test-Path node_modules)) {
+  Info "pnpm install (first run)"
+  pnpm install
+  if ($LASTEXITCODE -ne 0) { Die "pnpm install failed" }
+}
 
 if ($Clean) {
   Info "cargo clean + rm dist"

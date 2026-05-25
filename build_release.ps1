@@ -102,7 +102,11 @@ if ($env:TAURI_SIGNING_PRIVATE_KEY) {
   Warn "no TAURI_SIGNING_PRIVATE_KEY - .exe.sig will NOT be generated. Auto-update payloads can't be published."
 }
 
-if (-not (Test-Path node_modules)) { Info "pnpm install (first run)"; pnpm install }
+if (-not (Test-Path node_modules)) {
+  Info "pnpm install (first run)"
+  pnpm install
+  if ($LASTEXITCODE -ne 0) { Die "pnpm install failed" }
+}
 
 if ($Clean) {
   Info "cargo clean + rm dist"

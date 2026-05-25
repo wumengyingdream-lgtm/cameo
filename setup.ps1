@@ -58,10 +58,12 @@ else { Info "adding x86_64-pc-windows-msvc"; rustup target add x86_64-pc-windows
 # -- dependencies ------------------------------------------------------------
 Info "pnpm install"
 pnpm install
+if ($LASTEXITCODE -ne 0) { Die "pnpm install failed" }
 Ok "JS dependencies installed"
 
 Info "warming the Cargo cache (cargo fetch)"
 Push-Location src-tauri; cargo fetch | Out-Null; Pop-Location
+if ($LASTEXITCODE -ne 0) { Die "cargo fetch failed" }
 Ok "Cargo dependencies fetched"
 
 # -- Codex CLI (not bundled - Cameo drives the user's own, authenticated copy)
