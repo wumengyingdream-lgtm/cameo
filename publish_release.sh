@@ -134,6 +134,15 @@ EOF
   queue "$out" "update/${manifest_name}.json"
 }
 
+# GitHub release assets. R2 (above) carries the Tauri auto-UPDATER (.app.tar.gz +
+# darwin-*.json). The open-source DOWNLOAD channel is GitHub Releases: the .dmg
+# installers + a website manifest (latest.json) are tagged + uploaded there, and
+# cameo_web serves them via cameo.ink/update/ (proxying releases/latest/download).
+GH_REPO="hAcKlyc/cameo"
+GH_DL_BASE="https://github.com/${GH_REPO}/releases/download/v${VERSION}"
+declare -a GH_FILES=()
+DMG_ARM64=""; DMG_X64=""
+
 # ── macOS scan (arm + intel) ────────────────────────────────────────────────
 for arch_pair in "aarch64-apple-darwin:aarch64:darwin-aarch64" "x86_64-apple-darwin:x86_64:darwin-x86_64"; do
   IFS=":" read -r RUST_TARGET ARCH MANIFEST_NAME <<< "$arch_pair"
@@ -164,9 +173,31 @@ for arch_pair in "aarch64-apple-darwin:aarch64:darwin-aarch64" "x86_64-apple-dar
 
   if [[ -n "$DMG" ]]; then
     queue "$DMG" "release/v${VERSION}/$(basename "$DMG")"
+    GH_FILES+=("$DMG")  # also publish the installer to the GitHub release
+    case "$ARCH" in
+      aarch64) DMG_ARM64=$(basename "$DMG") ;;
+      x86_64)  DMG_X64=$(basename "$DMG") ;;
+    esac
     ok "  dmg: $(basename "$DMG")"
   fi
 done
+
+# ── website download manifest (latest.json) ──────────────────────────────────
+# cameo_web's download buttons fetch this (cameo.ink/update/latest.json proxies
+# releases/latest/download/latest.json). URLs point at the GitHub release assets.
+if [[ -n "$DMG_ARM64" || -n "$DMG_X64" ]]; then
+  LATEST_JSON="${MANIFEST_DIR}/latest.json"
+  {
+    printf '{\n  "version": "%s",\n  "pub_date": "%s",\n  "release_notes": "%s",\n  "downloads": {\n' \
+      "$VERSION" "$PUB_DATE" "$NOTES"
+    sep=""
+    [[ -n "$DMG_ARM64" ]] && { printf '%s    "mac_arm64": { "name": "Apple Silicon", "url": "%s/%s" }' "$sep" "$GH_DL_BASE" "$DMG_ARM64"; sep=$',\n'; }
+    [[ -n "$DMG_X64" ]]   && printf '%s    "mac_intel": { "name": "Intel Mac", "url": "%s/%s" }' "$sep" "$GH_DL_BASE" "$DMG_X64"
+    printf '\n  }\n}\n'
+  } > "$LATEST_JSON"
+  GH_FILES+=("$LATEST_JSON")
+  ok "manifest: latest.json (website downloads → GitHub release)"
+fi
 
 # ── upload ──────────────────────────────────────────────────────────────────
 if [[ ${#UPLOADS[@]} -eq 0 ]]; then
@@ -180,6 +211,12 @@ for entry in "${UPLOADS[@]}"; do
   printf '    %s\n         → r2:%s/%s\n' "$(basename "$SRC")" "$R2_BUCKET" "$DST"
 done
 echo ""
+
+if [[ ${#GH_FILES[@]} -gt 0 ]]; then
+  info "GitHub release v${VERSION} will receive ${#GH_FILES[@]} asset(s):"
+  for f in "${GH_FILES[@]}"; do printf '    %s\n' "$(basename "$f")"; done
+  echo ""
+fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   ok "DRY RUN — no upload performed."
@@ -219,6 +256,32 @@ for entry in "${UPLOADS[@]}"; do
 done
 echo "  └───────────────────────────────────────────────────────────"
 echo ""
+
+# ── GitHub Release (open-source distribution + website download source) ──────
+# Tag + create the release (idempotent) and upload the installers + latest.json.
+# cameo_web reads releases/latest/download/latest.json for its download buttons.
+# Windows publishes to the SAME release from publish_release.ps1 (whichever runs
+# first creates it; the other uploads with --clobber).
+if command -v gh >/dev/null 2>&1 && [[ ${#GH_FILES[@]} -gt 0 ]]; then
+  TAG="v${VERSION}"
+  info "GitHub release: ${GH_REPO}@${TAG}"
+  if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+    git tag -a "$TAG" -m "Cameo $TAG" && git push origin "$TAG" && ok "tagged $TAG"
+  else
+    ok "tag $TAG already exists"
+  fi
+  if ! gh release view "$TAG" >/dev/null 2>&1; then
+    gh release create "$TAG" --title "Cameo $TAG" --notes "$NOTES" --verify-tag && ok "created GitHub release $TAG"
+  fi
+  gh release upload "$TAG" "${GH_FILES[@]}" --clobber \
+    && ok "uploaded ${#GH_FILES[@]} asset(s) → download links live at cameo.ink"
+  echo ""
+else
+  warn "gh CLI missing or no installers — skipped GitHub release; cameo_web download"
+  warn "buttons stay on the GitHub releases page until a release with latest.json exists."
+  echo ""
+fi
+
 warn "REMINDER: bump src-tauri/tauri.conf.json's version BEFORE running this"
 warn "script for the next release, or you'll re-publish v${VERSION}."
 warn "Windows publishes separately — run publish_release.ps1 on the Windows box."

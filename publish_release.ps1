@@ -121,6 +121,12 @@ function Write-Manifest($name, $payloadFilename, $sigFile) {
   Queue $out "update/$name.json"
 }
 
+# GitHub release assets. R2 (above) carries the Tauri auto-UPDATER; the
+# open-source DOWNLOAD channel is GitHub Releases (-setup.exe + latest_win.json),
+# which cameo_web serves via cameo.ink/update/ (releases/latest/download).
+$ghRepo  = "hAcKlyc/cameo"
+$ghFiles = @()
+
 # -- Windows scan (x64) ------------------------------------------------------
 $zip = Get-ChildItem -Path $nsisDir -Filter '*.nsis.zip' -ErrorAction SilentlyContinue | Select-Object -First 1
 $exe = Get-ChildItem -Path $nsisDir -Filter '*-setup.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -136,7 +142,26 @@ if (-not $zip) {
 }
 if ($exe) {
   Queue $exe.FullName "release/v$Version/$($exe.Name)"
+  $ghFiles += $exe.FullName  # also publish the installer to the GitHub release
   Ok "  installer: $($exe.Name)"
+
+  # Website download manifest (latest_win.json) -> GitHub release. cameo_web's
+  # download button fetches cameo.ink/update/latest_win.json (proxying
+  # releases/latest/download/latest_win.json); url -> the GitHub asset.
+  $latestWin = Join-Path $manifestDir 'latest_win.json'
+  $ghDlBase  = "https://github.com/$ghRepo/releases/download/v$Version"
+  @"
+{
+  "version": "$Version",
+  "pub_date": "$PubDate",
+  "release_notes": "$Notes",
+  "downloads": {
+    "win_x64": { "name": "Windows x64", "url": "$ghDlBase/$($exe.Name)" }
+  }
+}
+"@ | Set-Content -Path $latestWin -Encoding utf8
+  $ghFiles += $latestWin
+  Ok "manifest: latest_win.json (website download -> GitHub release)"
 }
 
 # -- upload ------------------------------------------------------------------
@@ -149,6 +174,12 @@ foreach ($u in $uploads) {
   Write-Host "         -> r2:$($env:R2_BUCKET)/$($u.Dst)"
 }
 Write-Host ""
+
+if ($ghFiles.Count -gt 0) {
+  Info "GitHub release v$Version will receive $($ghFiles.Count) asset(s):"
+  foreach ($f in $ghFiles) { Write-Host "    $(Split-Path $f -Leaf)" }
+  Write-Host ""
+}
 
 if ($DryRun) { Ok "DRY RUN - no upload performed."; exit 0 }
 
@@ -185,6 +216,28 @@ foreach ($u in $uploads) {
 }
 Write-Host "  +--------------------------------------------------------------"
 Write-Host ""
+
+# -- GitHub Release (open-source distribution + website download source) ------
+# Tag + create (idempotent) and upload the installer + latest_win.json. macOS
+# publishes to the SAME release from publish_release.sh (whichever runs first
+# creates it; the other uploads with --clobber).
+if ((Get-Command gh -ErrorAction SilentlyContinue) -and $ghFiles.Count -gt 0) {
+  $tag = "v$Version"
+  Info "GitHub release: $ghRepo@$tag"
+  & git rev-parse -q --verify "refs/tags/$tag" *> $null
+  if ($LASTEXITCODE -ne 0) { & git tag -a $tag -m "Cameo $tag"; & git push origin $tag; Ok "tagged $tag" }
+  else { Ok "tag $tag already exists" }
+  & gh release view $tag *> $null
+  if ($LASTEXITCODE -ne 0) { & gh release create $tag --title "Cameo $tag" --notes "$Notes" --verify-tag; Ok "created GitHub release $tag" }
+  & gh release upload $tag @ghFiles --clobber
+  if ($LASTEXITCODE -eq 0) { Ok "uploaded $($ghFiles.Count) asset(s) -> download links live at cameo.ink" }
+  Write-Host ""
+} else {
+  Warn "gh CLI missing or no installer - skipped GitHub release; cameo_web download"
+  Warn "button stays on the releases page until a release with latest_win.json exists."
+  Write-Host ""
+}
+
 Warn "REMINDER: bump src-tauri/tauri.conf.json's version BEFORE running this"
 Warn "script for the next release, or you'll re-publish v$Version."
 Warn "macOS publishes separately - run ./publish_release.sh on the Mac."
