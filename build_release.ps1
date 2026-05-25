@@ -121,13 +121,14 @@ if ($LASTEXITCODE -ne 0) { Die "typecheck failed" }
 $start = Get-Date
 
 # -- build NSIS installer + updater payload ----------------------------------
-# `nsis` produces the user-visible installer .exe (Cameo_<ver>_x64-setup.exe).
-# `updater` produces the .nsis.zip + .nsis.zip.sig pair that tauri-plugin-updater
-# downloads at runtime. We always request both; the sig appears only when
-# TAURI_SIGNING_PRIVATE_KEY is set in env (already warned above otherwise).
-Info "pnpm tauri build --target $Target --bundles nsis,updater"
+# `nsis` produces the user-visible installer .exe (Cameo_<ver>_x64-setup.exe)
+# and, when the updater is configured, the .nsis.zip + .nsis.zip.sig pair that
+# tauri-plugin-updater downloads at runtime. Windows Tauri only accepts
+# `msi`/`nsis` as bundle names; unlike macOS, there is no separate `updater`
+# bundle value to pass here.
+Info "pnpm tauri build --target $Target --bundles nsis"
 $env:NODE_OPTIONS = '--max-old-space-size=4096'
-pnpm tauri build --target $Target --bundles nsis,updater
+pnpm tauri build --target $Target --bundles nsis
 if ($LASTEXITCODE -ne 0) { Die "tauri build failed" }
 
 $nsisDir = Join-Path $PSScriptRoot "src-tauri\target\$Target\release\bundle\nsis"
