@@ -20,6 +20,7 @@ src-tauri/gen/schemas/
 # Claude Code dev tooling (machine-specific; includes vendored/symlinked skills).
 # Kept local, out of the public repo.
 .claude/
+.agents/
 
 # Local-only docs (developer thinking / process; NOT part of the open-source repo).
 # Committed specs live at specs/ root (DESIGN.md, ...) and specs/tech_docs/.
