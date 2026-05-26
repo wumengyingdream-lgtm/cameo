@@ -8,6 +8,9 @@ export type Tool = "select" | "point" | "rect" | "ellipse" | "brush";
 export type MarkShape = "point" | "rect" | "ellipse" | "brush";
 export const MARK_SHAPES: MarkShape[] = ["point", "rect", "ellipse", "brush"];
 export const isMarkTool = (t: Tool): t is MarkShape => t !== "select";
+export const CHAT_PANEL_MIN_WIDTH = 380;
+export const CHAT_PANEL_DEFAULT_WIDTH = 460;
+export const CHAT_PANEL_MAX_WIDTH = 640;
 
 /** Two-image comparison overlay. "slider" overlays before/after of the same
  *  scene (lineage); "side" shows two images side by side. */
@@ -35,6 +38,9 @@ interface UiState {
   /** Floating AI panel visibility (toggled from the topbar, like the sidebar). */
   chatOpen: boolean;
   toggleChat: () => void;
+  /** Runtime-only chat width; deliberately not persisted. */
+  chatWidth: number;
+  setChatWidth: (width: number) => void;
 }
 
 /** Chrome-side UI state (HUD readouts, active tool). Kept separate from the
@@ -52,4 +58,9 @@ export const useUiStore = create<UiState>((set) => ({
   toggleMinimap: () => set((s) => ({ minimapVisible: !s.minimapVisible })),
   chatOpen: true,
   toggleChat: () => set((s) => ({ chatOpen: !s.chatOpen })),
+  chatWidth: CHAT_PANEL_DEFAULT_WIDTH,
+  setChatWidth: (width) =>
+    set({
+      chatWidth: Math.min(CHAT_PANEL_MAX_WIDTH, Math.max(CHAT_PANEL_MIN_WIDTH, width)),
+    }),
 }));

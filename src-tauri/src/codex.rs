@@ -4,7 +4,8 @@
 //! notifications into `UnifiedEvent`s.
 //!
 //! Flow: spawn → initialize (+initialized) → thread/start | thread/resume →
-//! turn/start (per message) / turn/interrupt (cancel) → stream items.
+//! turn/start (new active turn) / turn/steer (same active turn) /
+//! turn/interrupt (cancel) → stream items.
 //! Image output (`imageGeneration` item: savedPath or base64 result) is copied
 //! into the Board folder, minted as an Asset, and placed right-of-source.
 //!
@@ -19,12 +20,15 @@ use crate::{assets, storage};
 use base64::Engine;
 use parking_lot::Mutex as PlMutex;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+#[cfg(not(windows))]
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
@@ -33,46 +37,245 @@ use tokio::sync::Mutex as TokioMutex;
 
 // ── PATH resolution (GUI apps get a minimal PATH; augment + `which`) ─────────
 
-fn augmented_path() -> String {
-    // GUI-launched apps inherit a stripped PATH (notably macOS .app bundles), so
-    // prepend the well-known toolchain bin dirs where `codex` tends to live, then
-    // fall back to the inherited PATH. Joined with the platform separator
-    // (`;` on Windows, `:` elsewhere) via `std::env::join_paths` — never hardcode.
-    let mut parts: Vec<PathBuf> = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        for d in [".local/bin", ".cargo/bin", ".bun/bin", ".deno/bin"] {
-            parts.push(home.join(d));
-        }
-        // Windows: npm global (`npm i -g @openai/codex`) and scoop shims sit
-        // under the user profile. `which` resolves the `.cmd`/`.exe` via PATHEXT.
-        #[cfg(windows)]
-        for d in ["AppData/Roaming/npm", "scoop/shims"] {
-            parts.push(home.join(d));
-        }
+#[cfg(not(windows))]
+const SHELL_PATH_TIMEOUT: Duration = Duration::from_secs(3);
+const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone)]
+struct ResolvedCodex {
+    path: PathBuf,
+    search_path: String,
+}
+
+fn push_unique(parts: &mut Vec<PathBuf>, path: PathBuf) {
+    if path.as_os_str().is_empty() || parts.iter().any(|p| p == &path) {
+        return;
     }
-    #[cfg(not(windows))]
+    parts.push(path);
+}
+
+fn push_split_path(parts: &mut Vec<PathBuf>, path: &OsStr) {
+    for p in std::env::split_paths(path) {
+        push_unique(parts, p);
+    }
+}
+
+#[cfg(not(windows))]
+fn push_unix_fallback_paths(parts: &mut Vec<PathBuf>) {
+    if let Some(home) = dirs::home_dir() {
+        for d in [
+            ".local/bin",
+            ".cargo/bin",
+            ".bun/bin",
+            ".deno/bin",
+            ".npm-global/bin",
+            ".volta/bin",
+            "Library/pnpm",
+            ".asdf/shims",
+            ".local/share/mise/shims",
+            ".local/share/fnm/aliases/default/bin",
+        ] {
+            push_unique(parts, home.join(d));
+        }
+        push_nvm_paths(parts, &home);
+    }
+
     for d in [
         "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
         "/usr/local/bin",
+        "/usr/local/sbin",
         "/usr/bin",
         "/bin",
         "/usr/sbin",
         "/sbin",
     ] {
-        parts.push(PathBuf::from(d));
+        push_unique(parts, PathBuf::from(d));
     }
+}
+
+#[cfg(not(windows))]
+fn push_nvm_paths(parts: &mut Vec<PathBuf>, home: &Path) {
+    let node_versions = home.join(".nvm").join("versions").join("node");
+    let Ok(entries) = std::fs::read_dir(node_versions) else {
+        return;
+    };
+    let mut versions: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    versions.sort_by(|a, b| {
+        node_version_key(b)
+            .cmp(&node_version_key(a))
+            .then_with(|| b.cmp(a))
+    });
+    for version in versions {
+        push_unique(parts, version.join("bin"));
+    }
+}
+
+#[cfg(not(windows))]
+fn node_version_key(path: &Path) -> Vec<u64> {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .trim_start_matches('v')
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|p| p.parse::<u64>().ok())
+        .collect()
+}
+
+#[cfg(windows)]
+fn push_windows_fallback_paths(parts: &mut Vec<PathBuf>) {
+    if let Some(home) = dirs::home_dir() {
+        for d in [
+            ".local/bin",
+            ".cargo/bin",
+            ".bun/bin",
+            ".deno/bin",
+            "AppData/Roaming/npm",
+            "AppData/Local/pnpm",
+            "AppData/Local/Volta/bin",
+            "scoop/shims",
+        ] {
+            push_unique(parts, home.join(d));
+        }
+    }
+    for var in ["APPDATA", "LOCALAPPDATA"] {
+        if let Some(root) = std::env::var_os(var).map(PathBuf::from) {
+            if var == "APPDATA" {
+                push_unique(parts, root.join("npm"));
+            } else {
+                push_unique(parts, root.join("pnpm"));
+                push_unique(parts, root.join("Volta").join("bin"));
+                push_unique(parts, root.join("Programs").join("nodejs"));
+            }
+        }
+    }
+    for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = std::env::var_os(var).map(PathBuf::from) {
+            push_unique(parts, root.join("nodejs"));
+        }
+    }
+}
+
+fn build_augmented_path(include_shell_path: bool) -> String {
+    #[cfg(windows)]
+    let _ = include_shell_path;
+    let mut parts: Vec<PathBuf> = Vec::new();
     if let Some(existing) = std::env::var_os("PATH") {
-        parts.extend(std::env::split_paths(&existing));
+        push_split_path(&mut parts, &existing);
     }
+    #[cfg(not(windows))]
+    if include_shell_path {
+        if let Some(shell_path) = detect_shell_path() {
+            push_split_path(&mut parts, OsStr::new(&shell_path));
+        }
+    }
+    #[cfg(not(windows))]
+    push_unix_fallback_paths(&mut parts);
+    #[cfg(windows)]
+    push_windows_fallback_paths(&mut parts);
+
     std::env::join_paths(&parts)
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|_| std::env::var("PATH").unwrap_or_default())
 }
 
-fn resolve_codex() -> Result<PathBuf, String> {
-    let path = augmented_path();
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    which::which_in("codex", Some(&path), cwd).map_err(|e| format!("codex not found in PATH: {e}"))
+#[cfg(not(windows))]
+fn detect_shell_path() -> Option<String> {
+    static CACHED: OnceLock<Option<String>> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+            let marker = format!("__CAMEO_PATH_{}__", std::process::id());
+            let script = format!("echo \"{marker}${{PATH}}{marker}\"");
+            let mut cmd = std::process::Command::new(shell);
+            crate::process::hide_console_window(&mut cmd);
+            let mut child = match cmd
+                .args(["-i", "-l", "-c", &script])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(_) => return None,
+            };
+            let deadline = Instant::now() + SHELL_PATH_TIMEOUT;
+            let output = loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break child.wait_with_output().ok(),
+                    Ok(None) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return None;
+                    }
+                }
+            };
+            output.filter(|o| o.status.success()).and_then(|o| {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                extract_marked_path(&stdout, &marker)
+            })
+        })
+        .clone()
+}
+
+#[cfg(not(windows))]
+fn extract_marked_path(stdout: &str, marker: &str) -> Option<String> {
+    let start = stdout.find(marker)? + marker.len();
+    let end = stdout[start..].find(marker)? + start;
+    let path = stdout[start..end].trim();
+    (path.len() > 10).then(|| path.to_string())
+}
+
+fn resolve_codex_in(search_path: String) -> Result<ResolvedCodex, String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    which::which_in("codex", Some(&search_path), cwd)
+        .map(|path| ResolvedCodex { path, search_path })
+        .map_err(|e| format!("codex not found in augmented PATH: {e}"))
+}
+
+fn resolve_codex() -> Result<ResolvedCodex, String> {
+    let fallback_path = build_augmented_path(false);
+    match resolve_codex_in(fallback_path.clone()) {
+        Ok(found) => Ok(found),
+        Err(fallback_err) => {
+            #[cfg(not(windows))]
+            {
+                let shell_path = build_augmented_path(true);
+                if shell_path != fallback_path {
+                    return resolve_codex_in(shell_path).map_err(|shell_err| {
+                        format!("{shell_err}; fallback search also failed: {fallback_err}")
+                    });
+                }
+            }
+            Err(fallback_err)
+        }
+    }
+}
+
+fn command_output_with_timeout(
+    mut cmd: std::process::Command,
+    timeout: Duration,
+) -> Option<std::process::Output> {
+    let mut child = cmd.spawn().ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 /// Whether the Codex CLI is detected on this machine, and if so where + which
@@ -87,18 +290,21 @@ pub struct CodexInfo {
 
 pub fn detect() -> CodexInfo {
     match resolve_codex() {
-        Ok(p) => {
-            let version = std::process::Command::new(&p)
-                .arg("--version")
-                .env("PATH", augmented_path())
-                .output()
-                .ok()
+        Ok(resolved) => {
+            let mut cmd = std::process::Command::new(&resolved.path);
+            crate::process::hide_console_window(&mut cmd);
+            cmd.arg("--version")
+                .env("PATH", &resolved.search_path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let version = command_output_with_timeout(cmd, VERSION_TIMEOUT)
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .filter(|s| !s.is_empty());
             CodexInfo {
                 found: true,
-                path: Some(p.to_string_lossy().to_string()),
+                path: Some(resolved.path.to_string_lossy().to_string()),
                 version,
             }
         }
@@ -114,6 +320,13 @@ pub fn detect() -> CodexInfo {
 
 type Pending = PlMutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>;
 
+#[derive(Debug, Clone)]
+struct QueuedSteer {
+    input: Value,
+    source_placement_ids: Vec<String>,
+    overlays: Vec<String>,
+}
+
 pub struct CodexSessionInner {
     app: AppHandle,
     registry: Arc<BoardRegistry>,
@@ -126,7 +339,16 @@ pub struct CodexSessionInner {
     thread_id: PlMutex<String>,
     /// Active session id (v0.0.2 multi-session).
     active_session_id: PlMutex<String>,
+    /// True from accepted `turn/start` dispatch until `turn/completed` (or process
+    /// teardown). While true, additional user input is delivered to Codex via
+    /// `turn/steer` instead of being rejected.
+    turn_in_flight: PlMutex<bool>,
     current_turn_id: PlMutex<Option<String>>,
+    /// User inputs submitted after `turn/start` but before Codex has returned /
+    /// emitted the concrete turn id. Flushed in order via `turn/steer`.
+    pending_steers: PlMutex<VecDeque<QueuedSteer>>,
+    /// Serializes `turn/steer` RPCs so queued user inputs keep their UI order.
+    steer_flush: TokioMutex<()>,
     /// Placement ids referenced by the in-flight turn (drives output placement).
     current_sources: PlMutex<Vec<String>>,
     /// Overlay temp files written for the in-flight turn. Deleted only after a
@@ -285,22 +507,46 @@ fn is_overlay_temp_path(path: &str) -> bool {
     p.components().count() == 1 && path.starts_with(".overlay-") && path.ends_with(".png")
 }
 
-fn cleanup_dispatch_overlays(inner: &Arc<CodexSessionInner>) {
-    let overlays = {
-        let mut current = inner.current_overlays.lock();
-        std::mem::take(&mut *current)
-    };
+fn cleanup_overlay_paths(folder: &Path, overlays: Vec<String>) {
     for rel in overlays {
         if !is_overlay_temp_path(&rel) {
             tracing::warn!(module = "codex", overlay = %rel, "skip unsafe overlay cleanup path");
             continue;
         }
-        if let Err(e) = std::fs::remove_file(inner.folder.join(&rel)) {
+        if let Err(e) = std::fs::remove_file(folder.join(&rel)) {
             if e.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!(module = "codex", overlay = %rel, "overlay cleanup failed: {e}");
             }
         }
     }
+}
+
+fn cleanup_dispatch_overlays(inner: &Arc<CodexSessionInner>) {
+    let overlays = {
+        let mut current = inner.current_overlays.lock();
+        std::mem::take(&mut *current)
+    };
+    cleanup_overlay_paths(&inner.folder, overlays);
+}
+
+fn clear_active_turn(inner: &Arc<CodexSessionInner>) {
+    *inner.turn_in_flight.lock() = false;
+    *inner.current_turn_id.lock() = None;
+}
+
+fn clear_pending_steers(inner: &Arc<CodexSessionInner>) {
+    let overlays = {
+        let mut queued = inner.pending_steers.lock();
+        queued.drain(..).flat_map(|q| q.overlays).collect()
+    };
+    cleanup_overlay_paths(&inner.folder, overlays);
+}
+
+fn clear_stream_state(inner: &Arc<CodexSessionInner>) {
+    inner.agent_accum.lock().clear();
+    inner.current_sources.lock().clear();
+    inner.pending_gen.lock().clear();
+    clear_pending_steers(inner);
 }
 
 // ── Public API (used by commands) ────────────────────────────────────────────
@@ -323,10 +569,11 @@ pub async fn start_session(
     let folder = board_reg.folder(&board_id).ok_or("unknown board")?;
     let codex = resolve_codex()?;
 
-    let mut cmd = tokio::process::Command::new(&codex);
+    let mut cmd = tokio::process::Command::new(&codex.path);
+    crate::process::hide_tokio_console_window(&mut cmd);
     cmd.arg("app-server")
         .current_dir(&folder)
-        .env("PATH", augmented_path())
+        .env("PATH", &codex.search_path)
         .env("PWD", &folder)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -370,7 +617,10 @@ pub async fn start_session(
         next_id: AtomicU64::new(1),
         thread_id: PlMutex::new(String::new()),
         active_session_id: PlMutex::new(String::new()),
+        turn_in_flight: PlMutex::new(false),
         current_turn_id: PlMutex::new(None),
+        pending_steers: PlMutex::new(VecDeque::new()),
+        steer_flush: TokioMutex::new(()),
         current_sources: PlMutex::new(Vec::new()),
         current_overlays: PlMutex::new(Vec::new()),
         output_index: AtomicU64::new(0),
@@ -488,6 +738,9 @@ pub async fn new_session(
 ) -> Result<String, String> {
     let session = codex_reg.get(&board_id).ok_or("session not started")?;
     let inner = &session.inner;
+    if *inner.turn_in_flight.lock() {
+        return Err("Cannot create a new session while Codex is working.".into());
+    }
     let folder = inner.folder.clone();
     let meta = session::new_session(&folder);
     let thread_id = ensure_thread(inner, &folder, &meta.id, None).await?;
@@ -507,6 +760,9 @@ pub async fn switch_session(
 ) -> Result<(), String> {
     let session = codex_reg.get(&board_id).ok_or("session not started")?;
     let inner = &session.inner;
+    if *inner.turn_in_flight.lock() {
+        return Err("Cannot switch sessions while Codex is working.".into());
+    }
     let folder = inner.folder.clone();
     let prev = session::thread_of(&folder, &session_id);
     let thread_id = ensure_thread(inner, &folder, &session_id, prev).await?;
@@ -534,8 +790,145 @@ fn thread_id_of(res: &Value) -> Option<String> {
     res.get("thread")?.get("id")?.as_str().map(String::from)
 }
 
+fn turn_id_of(res: &Value) -> Option<String> {
+    res.get("turn")
+        .and_then(|t| t.get("id"))
+        .or_else(|| res.get("turnId"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+fn turn_steer_params(thread_id: &str, turn_id: &str, input: Value) -> Value {
+    json!({
+        "threadId": thread_id,
+        "input": input,
+        "expectedTurnId": turn_id,
+    })
+}
+
+fn resolve_refs(
+    inner: &Arc<CodexSessionInner>,
+    board_id: &str,
+    source_placement_ids: &[String],
+    overlay_map: &HashMap<String, String>,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let Some(entry) = inner.registry.get(board_id) else {
+        return Err("unknown board".into());
+    };
+    let doc = entry.doc.lock();
+    Ok(source_placement_ids
+        .iter()
+        .filter_map(|pid| {
+            let p = doc.placements.iter().find(|p| &p.id == pid)?;
+            let a = doc.assets.iter().find(|a| a.id == p.asset_id)?;
+            Some((a.path.clone(), overlay_map.get(pid).cloned()))
+        })
+        .collect())
+}
+
+fn queue_steer(
+    inner: &Arc<CodexSessionInner>,
+    input: Value,
+    source_placement_ids: Vec<String>,
+    overlays: Vec<String>,
+) -> usize {
+    let mut pending = inner.pending_steers.lock();
+    pending.push_back(QueuedSteer {
+        input,
+        source_placement_ids,
+        overlays,
+    });
+    pending.len()
+}
+
+async fn dispatch_steer_unlocked(
+    inner: &Arc<CodexSessionInner>,
+    thread_id: &str,
+    turn_id: &str,
+    input: Value,
+    source_placement_ids: Vec<String>,
+    overlays: Vec<String>,
+) -> Result<(), String> {
+    match inner
+        .call(
+            "turn/steer",
+            turn_steer_params(thread_id, turn_id, input),
+            15_000,
+        )
+        .await
+    {
+        Ok(_) => {
+            if !source_placement_ids.is_empty() {
+                *inner.current_sources.lock() = source_placement_ids;
+            }
+            if !overlays.is_empty() {
+                inner.current_overlays.lock().extend(overlays);
+            }
+            tracing::info!(module = "codex", turn = %turn_id, "turn/steer ok");
+            Ok(())
+        }
+        Err(e) => {
+            cleanup_overlay_paths(&inner.folder, overlays);
+            Err(e)
+        }
+    }
+}
+
+async fn send_steer(
+    inner: &Arc<CodexSessionInner>,
+    thread_id: String,
+    turn_id: String,
+    input: Value,
+    source_placement_ids: Vec<String>,
+    overlays: Vec<String>,
+) -> Result<(), String> {
+    let _guard = inner.steer_flush.lock().await;
+    dispatch_steer_unlocked(
+        inner,
+        &thread_id,
+        &turn_id,
+        input,
+        source_placement_ids,
+        overlays,
+    )
+    .await
+}
+
+async fn flush_pending_steers(inner: &Arc<CodexSessionInner>) {
+    let _guard = inner.steer_flush.lock().await;
+    loop {
+        let Some(turn_id) = inner.current_turn_id.lock().clone() else {
+            return;
+        };
+        let thread_id = inner.thread_id.lock().clone();
+        if thread_id.is_empty() {
+            return;
+        }
+        let Some(queued) = inner.pending_steers.lock().pop_front() else {
+            return;
+        };
+        if let Err(e) = dispatch_steer_unlocked(
+            inner,
+            &thread_id,
+            &turn_id,
+            queued.input,
+            queued.source_placement_ids,
+            queued.overlays,
+        )
+        .await
+        {
+            emit_runtime_log(
+                inner,
+                "error",
+                format!("Could not send queued message to active Codex turn: {e}"),
+            );
+        }
+    }
+}
+
 /// Send a user message: resolve referenced placements → file paths in the
-/// prompt (D4), record sources for output placement, fire `turn/start`.
+/// prompt (D4), record sources for output placement, then either start a new
+/// Codex turn or steer the current active turn.
 pub async fn send_message(
     codex_reg: Arc<CodexRegistry>,
     board_id: String,
@@ -546,36 +939,73 @@ pub async fn send_message(
     let session = codex_reg.get(&board_id).ok_or("session not started")?;
     let inner = &session.inner;
     let overlay_map: HashMap<String, String> = overlays.into_iter().collect();
-    *inner.current_overlays.lock() = overlay_map.values().cloned().collect();
+    let new_overlays: Vec<String> = overlay_map.values().cloned().collect();
 
     let thread_id = inner.thread_id.lock().clone();
     if thread_id.is_empty() {
-        cleanup_dispatch_overlays(inner);
+        cleanup_overlay_paths(&inner.folder, new_overlays);
         return Err("session has no thread yet".into());
     }
 
     // Resolve placement ids → (clean asset path, optional marking-overlay path).
-    let refs: Vec<(String, Option<String>)> = {
-        let Some(entry) = inner.registry.get(&board_id) else {
-            cleanup_dispatch_overlays(inner);
-            return Err("unknown board".into());
-        };
-        let doc = entry.doc.lock();
-        source_placement_ids
-            .iter()
-            .filter_map(|pid| {
-                let p = doc.placements.iter().find(|p| &p.id == pid)?;
-                let a = doc.assets.iter().find(|a| a.id == p.asset_id)?;
-                Some((a.path.clone(), overlay_map.get(pid).cloned()))
-            })
-            .collect()
+    let refs = match resolve_refs(inner, &board_id, &source_placement_ids, &overlay_map) {
+        Ok(refs) => refs,
+        Err(e) => {
+            cleanup_overlay_paths(&inner.folder, new_overlays);
+            return Err(e);
+        }
     };
+    let prompt = build_turn_prompt(&text, &refs);
+    let input = json!([{ "type": "text", "text": prompt, "text_elements": [] }]);
 
+    let active_turn_id = { inner.current_turn_id.lock().clone() };
+    if let Some(turn_id) = active_turn_id {
+        let has_pending_steers = { !inner.pending_steers.lock().is_empty() };
+        if !has_pending_steers {
+            send_steer(
+                inner,
+                thread_id,
+                turn_id,
+                input,
+                source_placement_ids,
+                new_overlays,
+            )
+            .await?;
+        } else {
+            let depth = queue_steer(inner, input, source_placement_ids, new_overlays);
+            tracing::info!(
+                module = "codex",
+                depth,
+                "queued turn/steer behind pending inputs"
+            );
+            flush_pending_steers(inner).await;
+        }
+        return Ok(());
+    }
+
+    let claimed_start = {
+        let mut in_flight = inner.turn_in_flight.lock();
+        if *in_flight {
+            false
+        } else {
+            *in_flight = true;
+            true
+        }
+    };
+    if !claimed_start {
+        let depth = queue_steer(inner, input, source_placement_ids, new_overlays);
+        tracing::info!(
+            module = "codex",
+            depth,
+            "queued turn/steer until Codex reports active turn id"
+        );
+        return Ok(());
+    }
+
+    *inner.current_overlays.lock() = new_overlays;
     *inner.current_sources.lock() = source_placement_ids;
     inner.output_index.store(0, Ordering::SeqCst);
 
-    let prompt = build_turn_prompt(&text, &refs);
-    let input = json!([{ "type": "text", "text": prompt, "text_elements": [] }]);
     let res = match inner
         .call(
             "turn/start",
@@ -586,18 +1016,19 @@ pub async fn send_message(
     {
         Ok(res) => res,
         Err(e) => {
+            clear_active_turn(inner);
+            clear_stream_state(inner);
             cleanup_dispatch_overlays(inner);
             return Err(e);
         }
     };
-    if let Some(tid) = res
-        .get("turn")
-        .and_then(|t| t.get("id"))
-        .and_then(|v| v.as_str())
-    {
-        *inner.current_turn_id.lock() = Some(tid.to_string());
+    if let Some(tid) = turn_id_of(&res) {
+        *inner.current_turn_id.lock() = Some(tid);
+    } else {
+        tracing::warn!(module = "codex", "turn/start ok without turn id");
     }
     tracing::info!(module = "codex", refs = refs.len(), "turn/start ok");
+    flush_pending_steers(inner).await;
     Ok(())
 }
 
@@ -702,6 +1133,8 @@ pub async fn stop_session(codex_reg: Arc<CodexRegistry>, board_id: &str) {
     }
     #[cfg(not(unix))]
     kill_tree(session.pid, 9);
+    clear_active_turn(inner);
+    clear_stream_state(inner);
     cleanup_dispatch_overlays(inner);
     let mut child = session.child.lock().await;
     let _ = child.start_kill();
@@ -729,7 +1162,9 @@ fn kill_tree(pid: u32, _sig: i32) {
     if pid == 0 {
         return;
     }
-    let _ = std::process::Command::new("taskkill")
+    let mut cmd = std::process::Command::new("taskkill");
+    crate::process::hide_console_window(&mut cmd);
+    let _ = cmd
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -787,6 +1222,8 @@ async fn reader_loop(inner: Arc<CodexSessionInner>, stdout: ChildStdout) {
     for (_, tx) in drained {
         let _ = tx.send(Err("app-server process exited".into()));
     }
+    clear_active_turn(&inner);
+    clear_stream_state(&inner);
     cleanup_dispatch_overlays(&inner);
     if !*inner.intentional_shutdown.lock() {
         inner.emit(UnifiedEvent::SessionComplete {
@@ -860,6 +1297,72 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    for (idx, ch) in s.chars().enumerate() {
+        if idx >= max {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn compact_json(value: &Value, max_chars: usize) -> String {
+    let raw = serde_json::to_string(value).unwrap_or_else(|_| "<unserializable>".into());
+    truncate_chars(&raw, max_chars)
+}
+
+fn string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
+    let mut cur = value;
+    for key in path {
+        cur = cur.get(*key)?;
+    }
+    cur.as_str().map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn codex_notice_message(params: &Value) -> Option<String> {
+    for path in [
+        &["message"][..],
+        &["error", "message"][..],
+        &["error"][..],
+        &["detail"][..],
+        &["details"][..],
+        &["data", "message"][..],
+        &["reason"][..],
+        &["text"][..],
+    ] {
+        if let Some(msg) = string_at_path(params, path) {
+            return Some(msg.to_string());
+        }
+    }
+
+    let fallback = if let Some(error) = params.get("error") {
+        error
+    } else {
+        params
+    };
+    match fallback {
+        Value::Null => None,
+        Value::Object(map) if map.is_empty() => None,
+        Value::Array(arr) if arr.is_empty() => None,
+        _ => Some(compact_json(fallback, 500)),
+    }
+}
+
+fn emit_runtime_log(inner: &Arc<CodexSessionInner>, level: &str, message: String) {
+    match level {
+        "error" => tracing::error!(module = "codex", "{message}"),
+        "warn" => tracing::warn!(module = "codex", "{message}"),
+        _ => tracing::info!(module = "codex", "{message}"),
+    }
+    inner.emit(UnifiedEvent::Log {
+        level: level.to_string(),
+        message,
+    });
+}
+
 // ── Notification + server-request handling ───────────────────────────────────
 
 async fn handle_notification(inner: &Arc<CodexSessionInner>, method: &str, params: Value) {
@@ -926,6 +1429,7 @@ async fn handle_notification(inner: &Arc<CodexSessionInner>, method: &str, param
             handle_item_completed(inner, &item).await;
         }
         "turn/started" => {
+            *inner.turn_in_flight.lock() = true;
             if let Some(tid) = params
                 .get("turn")
                 .and_then(|t| t.get("id"))
@@ -933,6 +1437,10 @@ async fn handle_notification(inner: &Arc<CodexSessionInner>, method: &str, param
             {
                 *inner.current_turn_id.lock() = Some(tid.to_string());
             }
+            let flush_inner = inner.clone();
+            tauri::async_runtime::spawn(async move {
+                flush_pending_steers(&flush_inner).await;
+            });
             inner.emit(UnifiedEvent::Status {
                 state: "running".into(),
             });
@@ -963,12 +1471,10 @@ async fn handle_notification(inner: &Arc<CodexSessionInner>, method: &str, param
             } else {
                 tracing::warn!(module = "codex", status = %status, error = ?error, "turn did not complete");
             }
-            *inner.current_turn_id.lock() = None;
+            clear_active_turn(inner);
             // Clear per-turn state so a stray late item can't leak / mis-place
             // against stale sources (review #3, #6).
-            inner.agent_accum.lock().clear();
-            inner.current_sources.lock().clear();
-            inner.pending_gen.lock().clear();
+            clear_stream_state(inner);
             cleanup_dispatch_overlays(inner);
             inner.emit(UnifiedEvent::TurnComplete { status, error });
         }
@@ -1050,15 +1556,32 @@ async fn handle_notification(inner: &Arc<CodexSessionInner>, method: &str, param
             }
         }
         "error" => {
-            let msg = params
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown error");
-            tracing::error!(module = "codex", "error notification: {msg}");
-            cleanup_dispatch_overlays(inner);
-            inner.emit(UnifiedEvent::Error {
-                message: msg.to_string(),
-            });
+            // Codex app-server `error` notifications are not a terminal turn
+            // contract: transport recovery can emit them while the same turn later
+            // streams output and finishes with `turn/completed`. Keep the turn
+            // alive; terminal state is driven by turn/completed/session EOF/RPC
+            // failure only.
+            let raw = compact_json(&params, 1200);
+            let active_turn = *inner.turn_in_flight.lock();
+            if let Some(msg) = codex_notice_message(&params) {
+                tracing::warn!(
+                    module = "codex",
+                    active_turn,
+                    params = %raw,
+                    "codex error notification kept non-terminal: {msg}"
+                );
+                inner.emit(UnifiedEvent::Log {
+                    level: "warn".into(),
+                    message: msg,
+                });
+            } else {
+                tracing::warn!(
+                    module = "codex",
+                    active_turn,
+                    params = %raw,
+                    "codex error notification without message kept non-terminal"
+                );
+            }
         }
         "warning" | "guardianWarning" | "configWarning" | "deprecationNotice" => {
             let msg = params
@@ -1252,9 +1775,7 @@ async fn on_image_generation(inner: &Arc<CodexSessionInner>, item: &Value) {
         match assets::import_generated_file(&inner.folder, Path::new(sp), &assets_snapshot) {
             Ok(a) => a,
             Err(e) => {
-                inner.emit(UnifiedEvent::Error {
-                    message: format!("save generated image: {e}"),
-                });
+                emit_runtime_log(inner, "error", format!("save generated image: {e}"));
                 return;
             }
         }
@@ -1270,16 +1791,12 @@ async fn on_image_generation(inner: &Arc<CodexSessionInner>, item: &Value) {
             ) {
                 Ok(a) => a,
                 Err(e) => {
-                    inner.emit(UnifiedEvent::Error {
-                        message: format!("write generated image: {e}"),
-                    });
+                    emit_runtime_log(inner, "error", format!("write generated image: {e}"));
                     return;
                 }
             },
             Err(e) => {
-                inner.emit(UnifiedEvent::Error {
-                    message: format!("decode generated image: {e}"),
-                });
+                emit_runtime_log(inner, "error", format!("decode generated image: {e}"));
                 return;
             }
         }
@@ -1334,4 +1851,121 @@ async fn handle_server_request(inner: &Arc<CodexSessionInner>, id: u64, method: 
         summary: method.to_string(),
     });
     inner.respond(id, json!({ "decision": "accept" })).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn push_unique_preserves_first_path() {
+        let mut parts = Vec::new();
+        push_unique(&mut parts, PathBuf::from("/a"));
+        push_unique(&mut parts, PathBuf::from("/b"));
+        push_unique(&mut parts, PathBuf::from("/a"));
+        assert_eq!(parts, vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+    }
+
+    #[test]
+    fn codex_error_notice_extracts_nested_messages() {
+        let params = json!({
+            "error": {
+                "message": "stream disconnected before completion",
+                "code": "transport"
+            }
+        });
+
+        assert_eq!(
+            codex_notice_message(&params).as_deref(),
+            Some("stream disconnected before completion")
+        );
+    }
+
+    #[test]
+    fn codex_error_notice_does_not_fabricate_unknown_error() {
+        assert_eq!(codex_notice_message(&json!({})), None);
+        assert_eq!(codex_notice_message(&Value::Null), None);
+    }
+
+    #[test]
+    fn turn_steer_params_include_expected_turn_precondition() {
+        let params = turn_steer_params(
+            "thread-1",
+            "turn-1",
+            json!([{ "type": "text", "text": "hi" }]),
+        );
+
+        assert_eq!(
+            params.get("threadId").and_then(Value::as_str),
+            Some("thread-1")
+        );
+        assert_eq!(
+            params.get("expectedTurnId").and_then(Value::as_str),
+            Some("turn-1")
+        );
+        assert_eq!(
+            params
+                .get("input")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("text"))
+                .and_then(Value::as_str),
+            Some("hi")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn extract_marked_path_ignores_noisy_shell_output() {
+        let marker = "__CAMEO_PATH_TEST__";
+        let stdout = format!("banner\n{marker}/nvm/bin:/usr/local/bin:/usr/bin{marker}\n");
+        assert_eq!(
+            extract_marked_path(&stdout, marker).as_deref(),
+            Some("/nvm/bin:/usr/local/bin:/usr/bin")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn nvm_paths_are_added_newest_version_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        for version in ["v9.0.0", "v20.10.0", "v18.19.1"] {
+            std::fs::create_dir_all(
+                tmp.path()
+                    .join(".nvm")
+                    .join("versions")
+                    .join("node")
+                    .join(version),
+            )
+            .unwrap();
+        }
+
+        let mut parts = Vec::new();
+        push_nvm_paths(&mut parts, tmp.path());
+
+        assert_eq!(
+            parts,
+            vec![
+                tmp.path()
+                    .join(".nvm")
+                    .join("versions")
+                    .join("node")
+                    .join("v20.10.0")
+                    .join("bin"),
+                tmp.path()
+                    .join(".nvm")
+                    .join("versions")
+                    .join("node")
+                    .join("v18.19.1")
+                    .join("bin"),
+                tmp.path()
+                    .join(".nvm")
+                    .join("versions")
+                    .join("node")
+                    .join("v9.0.0")
+                    .join("bin"),
+            ]
+        );
+    }
 }

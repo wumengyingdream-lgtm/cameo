@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CanvasScene, type CanvasContextTarget } from "./scene";
 import { useUiStore } from "../store/ui";
 import { useBoardStore } from "../store/board";
@@ -9,6 +9,7 @@ import { SelectionBar } from "../components/SelectionBar";
 import { CropOverlay } from "../components/CropOverlay";
 import { CanvasContextMenu } from "../components/CanvasContextMenu";
 import { useT } from "../i18n/locale";
+import { useFileImport } from "../lib/useFileImport";
 
 /**
  * Mounts the PixiJS scene and bridges it to the stores:
@@ -25,10 +26,21 @@ export function CameoCanvas() {
   const cropRef = useRef<HTMLDivElement>(null);
   const [ctxMenu, setCtxMenu] = useState<CanvasContextTarget | null>(null);
   const chatOpen = useUiStore((s) => s.chatOpen);
+  const chatWidth = useUiStore((s) => s.chatWidth);
   const sidebarOpen = useWorkspaceStore((s) => s.sidebarOpen);
   const t = useT();
   const markComment = t("canvas.markComment");
   const renameHint = t("canvas.renameHint");
+
+  const importAtDropPoint = useCallback(async (paths: string[], position?: { x: number; y: number }) => {
+    if (!position || !sceneRef.current) {
+      await useBoardStore.getState().importFiles(paths);
+      return;
+    }
+    await useBoardStore.getState().importFilesAt(paths, sceneRef.current.screenToWorldPoint(position.x, position.y));
+  }, []);
+
+  useFileImport({ onDrop: importAtDropPoint });
 
   // Scene lifecycle.
   useEffect(() => {
@@ -66,6 +78,11 @@ export function CameoCanvas() {
             crop.style.top = `${rect.y}px`;
             crop.style.width = `${rect.w}px`;
             crop.style.height = `${rect.h}px`;
+            crop.style.setProperty("--cm-crop-area-left", `${rect.imageX - rect.x}px`);
+            crop.style.setProperty("--cm-crop-area-top", `${rect.imageY - rect.y}px`);
+            crop.style.setProperty("--cm-crop-area-width", `${rect.imageW}px`);
+            crop.style.setProperty("--cm-crop-area-height", `${rect.imageH}px`);
+            crop.style.setProperty("--cm-crop-area-rotation", `${rect.rotation}rad`);
           } else {
             crop.style.display = "none";
           }
@@ -129,6 +146,12 @@ export function CameoCanvas() {
         useUiStore.getState().setCropping(null);
         return;
       }
+      if (
+        useUiStore.getState().cropping ||
+        document.querySelector(".cm-ctx, .cm-modal-backdrop, .cm-gallery-backdrop, .cm-gdetail-backdrop, .cm-compare")
+      ) {
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
         if (e.shiftKey) useHistoryStore.getState().redo();
@@ -179,11 +202,11 @@ export function CameoCanvas() {
   useEffect(() => {
     sceneRef.current?.setSafeInsets({
       left: sidebarOpen ? 252 : 0,
-      right: chatOpen ? 400 : 0,
+      right: chatOpen ? chatWidth + 20 : 0,
       top: 56,
       bottom: 72,
     });
-  }, [chatOpen, sidebarOpen]);
+  }, [chatOpen, chatWidth, sidebarOpen]);
 
   // Push localized canvas-overlay strings to the scene (re-applies on lang change).
   useEffect(() => {

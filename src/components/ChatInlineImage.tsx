@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Copy, FileText, FolderOpen, Image, ImagePlus, Maximize } from "lucide-react";
 import { useChatStore } from "../store/chat";
 import { useBoardStore } from "../store/board";
 import { useComposerStore } from "../store/composer";
@@ -13,9 +14,8 @@ import { useT } from "../i18n/locale";
  *   • in-workspace → thumbnail via `cameo://`
  *   • out-of-workspace → base64 thumb data URL from `resolveChatImage`
  *
- * Right-click → context menu with platform-appropriate actions (different
- * for in-workspace vs out-of-workspace — "Add to canvas" only makes sense
- * for outside-the-workspace images).
+ * Right-click → context menu that bridges the chat artifact back into the
+ * canvas/reference loop.
  */
 export function ChatInlineImage({ path }: { path: string }) {
   const t = useT();
@@ -23,16 +23,31 @@ export function ChatInlineImage({ path }: { path: string }) {
   const resolution = useChatStore((s) => s.imageResolutions.get(path));
   const resolveChatImage = useChatStore((s) => s.resolveChatImage);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const missingRetries = useRef(0);
   // After "添加到画布" succeeds we want this card to behave like the canvas
   // variant — store the new placement id locally (chat store's resolution
   // map only tracks Rust's read-only classification).
   const [addedPlacementId, setAddedPlacementId] = useState<string | null>(null);
 
-  // Kick the resolver on mount and any time the path changes (we never
-  // resolve twice — `resolveChatImage` short-circuits on cached entries).
   useEffect(() => {
-    resolveChatImage(path);
-  }, [path, resolveChatImage]);
+    missingRetries.current = 0;
+  }, [path]);
+
+  // Kick the resolver on mount and retry a few times after "missing" because
+  // streamed model text can mention a file before the producing tool has
+  // flushed it to disk. `resolveChatImage` still short-circuits pending/resolved.
+  useEffect(() => {
+    if (resolution === undefined) {
+      resolveChatImage(path);
+      return;
+    }
+    if (resolution !== "missing" || missingRetries.current >= 4) return;
+    const timer = window.setTimeout(() => {
+      missingRetries.current += 1;
+      resolveChatImage(path);
+    }, 1_200);
+    return () => window.clearTimeout(timer);
+  }, [path, resolution, resolveChatImage]);
 
   const onContext = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -67,9 +82,10 @@ export function ChatInlineImage({ path }: { path: string }) {
   const thumbSrc = res.inWorkspace && res.workspaceRelPath && boardId
     ? cameoUrl(boardId, res.workspaceRelPath)
     : res.thumbDataUrl ?? "";
+  const existingPlacementId = addedPlacementId ?? res.existingPlacementId ?? null;
 
   // Resolved → render as an actual visible thumbnail (not a chip). Right-click
-  // still surfaces the context menu (copy / use as ref / add to canvas / reveal).
+  // surfaces canvas/reference and file actions.
   return (
     <span className="cm-chatimg-wrap">
       <span
@@ -89,8 +105,7 @@ export function ChatInlineImage({ path }: { path: string }) {
           y={menu.y}
           onClose={() => setMenu(null)}
           absPath={res.absPath}
-          inWorkspace={res.inWorkspace}
-          addedPlacementId={addedPlacementId}
+          existingPlacementId={existingPlacementId}
           onAddedPlacement={setAddedPlacementId}
         />
       )}
@@ -103,12 +118,11 @@ interface MenuProps {
   y: number;
   onClose: () => void;
   absPath: string;
-  inWorkspace: boolean;
-  addedPlacementId: string | null;
+  existingPlacementId: string | null;
   onAddedPlacement: (id: string) => void;
 }
 
-function ChatImageMenu({ x, y, onClose, absPath, inWorkspace, addedPlacementId, onAddedPlacement }: MenuProps) {
+function ChatImageMenu({ x, y, onClose, absPath, existingPlacementId, onAddedPlacement }: MenuProps) {
   const t = useT();
   const ref = useRef<HTMLDivElement>(null);
 
@@ -130,6 +144,18 @@ function ChatImageMenu({ x, y, onClose, absPath, inWorkspace, addedPlacementId, 
 
   const doCopy = () => {
     void ipc.copyImageFromPath(absPath).catch(() => { /* silent */ });
+    onClose();
+  };
+
+  const doCopyPath = () => {
+    void navigator.clipboard.writeText(absPath).catch(() => { /* silent */ });
+    onClose();
+  };
+
+  const doShowOnCanvas = () => {
+    if (existingPlacementId) {
+      useBoardStore.getState().revealPlacement(existingPlacementId);
+    }
     onClose();
   };
 
@@ -165,10 +191,11 @@ function ChatImageMenu({ x, y, onClose, absPath, inWorkspace, addedPlacementId, 
     // Reference = a composer pill. We need an actual placementId. For
     // in-workspace images that aren't yet on the canvas we still need to
     // import (a pill references a Placement). Path:
-    //   1. If already added via "Add to canvas" earlier → use that id.
+    //   1. If resolver found an existing placement, or this menu imported
+    //      one earlier, use that id.
     //   2. Else → import (chat-import command works in both cases since
     //      content-addressed dedup means in-workspace files don't double).
-    let placementId = addedPlacementId;
+    let placementId = existingPlacementId;
     if (!placementId) {
       const boardId = useBoardStore.getState().boardId;
       if (!boardId) {
@@ -191,10 +218,6 @@ function ChatImageMenu({ x, y, onClose, absPath, inWorkspace, addedPlacementId, 
     onClose();
   };
 
-  // Add-to-canvas item only meaningful for outside-workspace images that
-  // haven't already been imported this session.
-  const showAddToCanvas = !inWorkspace && !addedPlacementId;
-
   return (
     <div
       ref={ref}
@@ -202,18 +225,32 @@ function ChatImageMenu({ x, y, onClose, absPath, inWorkspace, addedPlacementId, 
       style={{ left: x, top: y }}
       role="menu"
     >
-      <button className="cm-ctx__item" onClick={doCopy} role="menuitem">
-        {t("chatImg.copy")}
-      </button>
-      <button className="cm-ctx__item" onClick={() => void doUseAsRef()} role="menuitem">
-        {t("chatImg.useAsRef")}
-      </button>
-      {showAddToCanvas && (
+      {existingPlacementId ? (
+        <button className="cm-ctx__item" onClick={doShowOnCanvas} role="menuitem">
+          <Maximize size={14} />
+          {t("chatImg.showOnCanvas")}
+        </button>
+      ) : (
         <button className="cm-ctx__item" onClick={() => void doAddToCanvas()} role="menuitem">
+          <ImagePlus size={14} />
           {t("chatImg.addToCanvas")}
         </button>
       )}
+      <button className="cm-ctx__item" onClick={() => void doUseAsRef()} role="menuitem">
+        <Image size={14} />
+        {t("chatImg.useAsRef")}
+      </button>
+      <div className="cm-ctx__sep" />
+      <button className="cm-ctx__item" onClick={doCopy} role="menuitem">
+        <Copy size={14} />
+        {t("chatImg.copy")}
+      </button>
+      <button className="cm-ctx__item" onClick={doCopyPath} role="menuitem">
+        <FileText size={14} />
+        {t("chatImg.copyPath")}
+      </button>
       <button className="cm-ctx__item" onClick={doReveal} role="menuitem">
+        <FolderOpen size={14} />
         {t("chatImg.reveal")}
       </button>
     </div>

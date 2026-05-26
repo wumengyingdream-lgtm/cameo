@@ -42,7 +42,19 @@ export interface SceneCallbacks {
   /** Screen-space bbox of the single selected image (live transform); null when
    *  not exactly one is selected. Fires per frame so the floating action bar +
    *  in-place crop overlay follow drag/pan/zoom. */
-  onSelRect?: (rect: { x: number; y: number; w: number; h: number } | null) => void;
+  onSelRect?: (
+    rect: {
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      imageX: number;
+      imageY: number;
+      imageW: number;
+      imageH: number;
+      rotation: number;
+    } | null
+  ) => void;
 }
 
 interface Camera {
@@ -73,13 +85,50 @@ interface Node {
   h: number;
 }
 
+interface WorldBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  centerX: number;
+  centerY: number;
+}
+
+interface SnapGuide {
+  axis: "x" | "y";
+  at: number;
+  from: number;
+  to: number;
+}
+
+interface SnapMatch {
+  axis: "x" | "y";
+  delta: number;
+  distance: number;
+  target: WorldBounds;
+  line: number;
+  sourceIndex: number;
+}
+
 const MIN_SCALE = 0.02;
 const MAX_SCALE = 12;
+const SNAP_THRESHOLD_PX = 8;
+const SNAP_GUIDE_PAD = 28;
+const DRAG_START_THRESHOLD_PX = 5;
+const MARQUEE_START_THRESHOLD_PX = 4;
+const HANDLE_START_THRESHOLD_PX = 4;
 // Light + red design system (DESIGN.md). Accent = brand-500; HALO = white ring
 // drawn under the accent so selection/marks read on ANY underlying image (§3.6).
 const ACCENT = 0xe53935;
+const GUIDE = 0xf87171;
 const HALO = 0xffffff;
 const CANVAS_BG = "#F5F5F7";
+const CORNER_SIGNS: [number, number][] = [
+  [-1, -1],
+  [1, -1],
+  [1, 1],
+  [-1, 1],
+];
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -109,6 +158,7 @@ export class CanvasScene {
   private readonly placementLayer = new Container();
   private readonly placeholderLayer = new Container();
   private readonly marqueeGfx = new Graphics();
+  private readonly snapGuideGfx = new Graphics();
   private readonly minimapGfx = new Graphics();
   private placeholderNodes = new Map<string, PlaceholderNode>();
   private clock = 0;
@@ -142,11 +192,25 @@ export class CanvasScene {
   private readonly handleLayer = new Container();
   private cornerHandles: Graphics[] = [];
   private rotateHandle: Graphics | null = null;
-  private xform = { id: "", cx: 0, cy: 0, startScale: 1, startRot: 0, startDist: 1, startAngle: 0 };
+  private xform = {
+    id: "",
+    cx: 0,
+    cy: 0,
+    startRot: 0,
+    startAngle: 0,
+    anchorX: 0,
+    anchorY: 0,
+    centerUnitX: 0,
+    centerUnitY: 0,
+    diagUnitX: 1,
+    diagUnitY: 0,
+    diagLength: 1,
+  };
   private lastPointer = { x: 0, y: 0 };
   private dragStart = { x: 0, y: 0 };
   private dragOrigin = new Map<string, { x: number; y: number }>();
   private moved = false;
+  private spacePan = false;
   private marqueeStart = { x: 0, y: 0 };
   private marqueeAdditive = false;
   // Screen-space padding kept clear of the floating chrome (topbar / toolbar /
@@ -237,6 +301,8 @@ export class CanvasScene {
     this.world.addChild(this.placeholderLayer); // loading shimmers, above placements
     this.app.stage.addChild(this.world);
     this.app.stage.addChild(this.marqueeGfx); // screen-space overlay
+    this.snapGuideGfx.eventMode = "none";
+    this.app.stage.addChild(this.snapGuideGfx); // screen-space alignment guides
     this.minimapGfx.eventMode = "none";
     this.app.stage.addChild(this.minimapGfx); // overview, bottom-right (screen space)
     this.app.stage.addChild(this.handleLayer); // transform handles — topmost
@@ -325,6 +391,7 @@ export class CanvasScene {
     for (const [id, rect] of placeholders) {
       if (!this.placeholderNodes.has(id)) this.createPlaceholder(id, rect);
     }
+    this.refreshCursor();
   }
 
   setSelection(ids: string[]): void {
@@ -334,16 +401,13 @@ export class CanvasScene {
 
   setTool(tool: Tool): void {
     this.tool = tool;
-    if (this.canvasEl && !this.cropId) this.canvasEl.style.cursor = tool === "select" ? "default" : "crosshair";
-    // Images show "move" only in select mode; a mark tool shows the draw cursor.
-    const nodeCursor = tool === "select" ? "move" : "crosshair";
-    for (const n of this.nodes.values()) n.container.cursor = nodeCursor;
+    this.refreshCursor();
   }
 
   /** Enter/leave crop mode for a placement (driven by ui.cropping). */
   enterCrop(id: string): void {
     this.cropId = id;
-    if (this.canvasEl) this.canvasEl.style.cursor = "crosshair";
+    this.refreshCursor();
   }
   exitCrop(): void {
     this.cropId = null;
@@ -352,7 +416,7 @@ export class CanvasScene {
       this.annoTemp = null;
     }
     if (this.mode === "crop") this.mode = "idle";
-    if (this.canvasEl) this.canvasEl.style.cursor = this.tool === "select" ? "default" : "crosshair";
+    this.refreshCursor();
   }
 
   /** Padding (px) kept clear of the floating chrome; fit/reveal center content
@@ -388,35 +452,234 @@ export class CanvasScene {
 
   /** Axis-aligned world bounds of the given placements (rotated corners). */
   private boundsOf(ids: string[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    const b = this.unionBounds(
+      ids
+        .map((id) => this.currentPlacementBounds(id))
+        .filter((bounds): bounds is WorldBounds => !!bounds)
+    );
+    return b ? { minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY } : null;
+  }
+
+  private boundsFromEdges(minX: number, minY: number, maxX: number, maxY: number): WorldBounds {
+    return {
+      minX,
+      minY,
+      maxX,
+      maxY,
+      centerX: (minX + maxX) / 2,
+      centerY: (minY + maxY) / 2,
+    };
+  }
+
+  /** Axis-aligned world bounds for a placement transform, including rotation. */
+  private boundsForTransform(node: Node, x: number, y: number, scale: number, rotation: number): WorldBounds {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
-    let any = false;
-    for (const id of ids) {
-      const p = this.placements.get(id);
-      const node = this.nodes.get(id);
-      if (!p || !node) continue;
-      const hw = (node.w * p.scale) / 2;
-      const hh = (node.h * p.scale) / 2;
-      const cos = Math.cos(p.rotation);
-      const sin = Math.sin(p.rotation);
-      for (const [lx, ly] of [
-        [-hw, -hh],
-        [hw, -hh],
-        [hw, hh],
-        [-hw, hh],
-      ]) {
-        const wx = p.x + lx * cos - ly * sin;
-        const wy = p.y + lx * sin + ly * cos;
-        minX = Math.min(minX, wx);
-        minY = Math.min(minY, wy);
-        maxX = Math.max(maxX, wx);
-        maxY = Math.max(maxY, wy);
-        any = true;
+    const hw = (node.w * scale) / 2;
+    const hh = (node.h * scale) / 2;
+    const cos = Math.cos(rotation);
+    const sin = Math.sin(rotation);
+    for (const [lx, ly] of [
+      [-hw, -hh],
+      [hw, -hh],
+      [hw, hh],
+      [-hw, hh],
+    ]) {
+      const wx = x + lx * cos - ly * sin;
+      const wy = y + lx * sin + ly * cos;
+      minX = Math.min(minX, wx);
+      minY = Math.min(minY, wy);
+      maxX = Math.max(maxX, wx);
+      maxY = Math.max(maxY, wy);
+    }
+    return this.boundsFromEdges(minX, minY, maxX, maxY);
+  }
+
+  private currentPlacementBounds(id: string): WorldBounds | null {
+    const node = this.nodes.get(id);
+    const p = this.placements.get(id);
+    if (!node || !p) return null;
+    return this.boundsForTransform(node, p.x, p.y, p.scale, p.rotation);
+  }
+
+  private unionBounds(bounds: WorldBounds[]): WorldBounds | null {
+    if (bounds.length === 0) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const b of bounds) {
+      minX = Math.min(minX, b.minX);
+      minY = Math.min(minY, b.minY);
+      maxX = Math.max(maxX, b.maxX);
+      maxY = Math.max(maxY, b.maxY);
+    }
+    return this.boundsFromEdges(minX, minY, maxX, maxY);
+  }
+
+  private snapTargets(exclude: Set<string>): WorldBounds[] {
+    const targets: WorldBounds[] = [];
+    for (const id of this.nodes.keys()) {
+      if (exclude.has(id)) continue;
+      const b = this.currentPlacementBounds(id);
+      if (b) targets.push(b);
+    }
+    return targets;
+  }
+
+  private axisValues(b: WorldBounds, axis: "x" | "y"): number[] {
+    return axis === "x" ? [b.minX, b.centerX, b.maxX] : [b.minY, b.centerY, b.maxY];
+  }
+
+  private guideForMatch(match: SnapMatch, moving: WorldBounds): SnapGuide {
+    if (match.axis === "x") {
+      return {
+        axis: "x",
+        at: match.line,
+        from: Math.min(moving.minY, match.target.minY) - SNAP_GUIDE_PAD,
+        to: Math.max(moving.maxY, match.target.maxY) + SNAP_GUIDE_PAD,
+      };
+    }
+    return {
+      axis: "y",
+      at: match.line,
+      from: Math.min(moving.minX, match.target.minX) - SNAP_GUIDE_PAD,
+      to: Math.max(moving.maxX, match.target.maxX) + SNAP_GUIDE_PAD,
+    };
+  }
+
+  private snapMatches(moving: WorldBounds, targets: WorldBounds[], axis: "x" | "y"): SnapMatch[] {
+    const threshold = SNAP_THRESHOLD_PX / this.cam.scale;
+    const matches: SnapMatch[] = [];
+    const sources = this.axisValues(moving, axis);
+    for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+      const src = sources[sourceIndex];
+      for (const target of targets) {
+        for (const line of this.axisValues(target, axis)) {
+          const delta = line - src;
+          const distance = Math.abs(delta);
+          if (distance > threshold) continue;
+          matches.push({ axis, delta, distance, target, line, sourceIndex });
+        }
       }
     }
-    return any ? { minX, minY, maxX, maxY } : null;
+    return matches.sort((a, b) => a.distance - b.distance);
+  }
+
+  private bestSnap(moving: WorldBounds, targets: WorldBounds[], axis: "x" | "y"): SnapMatch | null {
+    return this.snapMatches(moving, targets, axis)[0] ?? null;
+  }
+
+  private dragBounds(dx: number, dy: number): WorldBounds | null {
+    const bounds: WorldBounds[] = [];
+    for (const [id, origin] of this.dragOrigin) {
+      const node = this.nodes.get(id);
+      const p = this.placements.get(id);
+      if (!node || !p) continue;
+      bounds.push(this.boundsForTransform(node, origin.x + dx, origin.y + dy, p.scale, p.rotation));
+    }
+    return this.unionBounds(bounds);
+  }
+
+  private snapDrag(dx: number, dy: number): { dx: number; dy: number; guides: SnapGuide[] } {
+    const exclude = new Set(this.dragOrigin.keys());
+    const targets = this.snapTargets(exclude);
+    const moving = this.dragBounds(dx, dy);
+    if (!moving || targets.length === 0) return { dx, dy, guides: [] };
+
+    const matchX = this.bestSnap(moving, targets, "x");
+    const matchY = this.bestSnap(moving, targets, "y");
+    const snappedDx = dx + (matchX?.delta ?? 0);
+    const snappedDy = dy + (matchY?.delta ?? 0);
+    const snappedBounds = this.dragBounds(snappedDx, snappedDy) ?? moving;
+    const guides: SnapGuide[] = [];
+    if (matchX) guides.push(this.guideForMatch(matchX, snappedBounds));
+    if (matchY) guides.push(this.guideForMatch(matchY, snappedBounds));
+    return { dx: snappedDx, dy: snappedDy, guides };
+  }
+
+  private resizeBounds(scale: number): WorldBounds | null {
+    const node = this.nodes.get(this.xform.id);
+    if (!node) return null;
+    return this.boundsForTransform(
+      node,
+      this.xform.anchorX + this.xform.centerUnitX * scale,
+      this.xform.anchorY + this.xform.centerUnitY * scale,
+      scale,
+      this.xform.startRot
+    );
+  }
+
+  private scaleForResizeMatch(match: SnapMatch): number | null {
+    const b0 = this.resizeBounds(0);
+    const b1 = this.resizeBounds(1);
+    if (!b0 || !b1) return null;
+    const source0 = this.axisValues(b0, match.axis)[match.sourceIndex];
+    const source1 = this.axisValues(b1, match.axis)[match.sourceIndex];
+    const slope = source1 - source0;
+    if (Math.abs(slope) < 1e-6) return null;
+    return clamp((match.line - source0) / slope, MIN_SCALE, MAX_SCALE);
+  }
+
+  private bestResizeSnap(moving: WorldBounds, targets: WorldBounds[], axis: "x" | "y"): SnapMatch | null {
+    for (const match of this.snapMatches(moving, targets, axis)) {
+      if (this.scaleForResizeMatch(match) != null) return match;
+    }
+    return null;
+  }
+
+  private snapResize(scale: number): { scale: number; guides: SnapGuide[] } {
+    const moving = this.resizeBounds(scale);
+    if (!moving) return { scale, guides: [] };
+    const targets = this.snapTargets(new Set([this.xform.id]));
+    if (targets.length === 0) return { scale, guides: [] };
+
+    const candidates = [...this.snapMatches(moving, targets, "x"), ...this.snapMatches(moving, targets, "y")].sort(
+      (a, b) => a.distance - b.distance
+    );
+    const threshold = SNAP_THRESHOLD_PX / this.cam.scale;
+    for (const primary of candidates) {
+      const snappedScale = this.scaleForResizeMatch(primary);
+      if (snappedScale == null) continue;
+      const snappedBounds = this.resizeBounds(snappedScale);
+      if (!snappedBounds) continue;
+
+      const snappedSource = this.axisValues(snappedBounds, primary.axis)[primary.sourceIndex];
+      if (Math.abs(snappedSource - primary.line) > threshold) continue;
+
+      const guides = [this.guideForMatch(primary, snappedBounds)];
+      const secondaryAxis = primary.axis === "x" ? "y" : "x";
+      const secondary = this.bestResizeSnap(snappedBounds, targets, secondaryAxis);
+      if (secondary && secondary.distance <= threshold) guides.push(this.guideForMatch(secondary, snappedBounds));
+      return { scale: snappedScale, guides };
+    }
+    return { scale, guides: [] };
+  }
+
+  private drawSnapGuides(guides: SnapGuide[]): void {
+    const g = this.snapGuideGfx;
+    g.clear();
+    for (const guide of guides) {
+      if (guide.axis === "x") {
+        const x = this.cam.x + guide.at * this.cam.scale;
+        const y0 = this.cam.y + guide.from * this.cam.scale;
+        const y1 = this.cam.y + guide.to * this.cam.scale;
+        g.moveTo(x, y0).lineTo(x, y1).stroke({ width: 4, color: HALO, alpha: 0.9 });
+        g.moveTo(x, y0).lineTo(x, y1).stroke({ width: 1.5, color: GUIDE, alpha: 0.95 });
+      } else {
+        const y = this.cam.y + guide.at * this.cam.scale;
+        const x0 = this.cam.x + guide.from * this.cam.scale;
+        const x1 = this.cam.x + guide.to * this.cam.scale;
+        g.moveTo(x0, y).lineTo(x1, y).stroke({ width: 4, color: HALO, alpha: 0.9 });
+        g.moveTo(x0, y).lineTo(x1, y).stroke({ width: 1.5, color: GUIDE, alpha: 0.95 });
+      }
+    }
+  }
+
+  private clearSnapGuides(): void {
+    this.snapGuideGfx.clear();
   }
 
   private fitBounds(b: { minX: number; minY: number; maxX: number; maxY: number }): void {
@@ -507,7 +770,7 @@ export class CanvasScene {
 
     const container = new Container();
     container.eventMode = "static";
-    container.cursor = this.tool === "select" ? "move" : "crosshair";
+    container.cursor = this.spacePan ? "grab" : this.tool === "select" ? "move" : "crosshair";
 
     const placeholder = new Graphics();
     placeholder.rect(-w / 2, -h / 2, w, h).fill({ color: 0xe8e8ea });
@@ -607,10 +870,37 @@ export class CanvasScene {
   setCropActive(active: boolean): void {
     this.cropActive = active;
     this.refreshOutlines();
+    this.refreshCursor();
   }
 
   setMinimapVisible(v: boolean): void {
     this.minimapVisible = v;
+  }
+
+  private refreshCursor(): void {
+    const panning = this.mode === "pan";
+    const canvasCursor = panning
+      ? "grabbing"
+      : this.cropActive
+        ? "default"
+      : this.spacePan
+        ? "grab"
+        : this.cropId
+          ? "crosshair"
+          : this.tool === "select"
+            ? "default"
+            : "crosshair";
+    if (this.canvasEl) this.canvasEl.style.cursor = canvasCursor;
+    const nodeCursor = panning
+      ? "grabbing"
+      : this.cropActive
+        ? "default"
+        : this.spacePan
+          ? "grab"
+          : this.tool === "select"
+            ? "move"
+            : "crosshair";
+    for (const n of this.nodes.values()) n.container.cursor = nodeCursor;
   }
 
   // ── Annotations ───────────────────────────────────────────────────────────
@@ -864,6 +1154,61 @@ export class CanvasScene {
     this.titleEl = el;
   }
 
+  private liveScreenBounds(node: Node): {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    imageX: number;
+    imageY: number;
+    imageW: number;
+    imageH: number;
+    rotation: number;
+  } {
+    const cx = node.container.position.x;
+    const cy = node.container.position.y;
+    const sc = node.container.scale.x;
+    const rot = node.container.rotation;
+    const hw = (node.w * sc) / 2;
+    const hh = (node.h * sc) / 2;
+    const cos = Math.cos(rot);
+    const sin = Math.sin(rot);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const [lx, ly] of [
+      [-hw, -hh],
+      [hw, -hh],
+      [hw, hh],
+      [-hw, hh],
+    ]) {
+      const wx = cx + lx * cos - ly * sin;
+      const wy = cy + lx * sin + ly * cos;
+      const sx = this.cam.x + wx * this.cam.scale;
+      const sy = this.cam.y + wy * this.cam.scale;
+      minX = Math.min(minX, sx);
+      minY = Math.min(minY, sy);
+      maxX = Math.max(maxX, sx);
+      maxY = Math.max(maxY, sy);
+    }
+    const screenCx = this.cam.x + cx * this.cam.scale;
+    const screenCy = this.cam.y + cy * this.cam.scale;
+    const imageW = node.w * sc * this.cam.scale;
+    const imageH = node.h * sc * this.cam.scale;
+    return {
+      x: minX,
+      y: minY,
+      w: maxX - minX,
+      h: maxY - minY,
+      imageX: screenCx - imageW / 2,
+      imageY: screenCy - imageH / 2,
+      imageW,
+      imageH,
+      rotation: rot,
+    };
+  }
+
   private updateTitle(): void {
     const el = this.titleEl;
     if (!el) return;
@@ -875,26 +1220,15 @@ export class CanvasScene {
       this.cb.onSelRect?.(null);
       return;
     }
-    // Live container transform → title + bar + crop overlay follow drag/resize.
-    const cx = node.container.position.x;
-    const cy = node.container.position.y;
-    const sc = node.container.scale.x;
-    const sw = node.w * sc * this.cam.scale;
-    const sh = node.h * sc * this.cam.scale;
-    const screenCx = this.cam.x + cx * this.cam.scale;
-    const screenCy = this.cam.y + cy * this.cam.scale;
-    // Filename title is LEFT-aligned to the image's top-left corner (the action
-    // bar stays centered, positioned separately via onSelRect).
-    const sx = screenCx - sw / 2;
-    const sy = screenCy - sh / 2;
-    this.cb.onSelRect?.({ x: screenCx - sw / 2, y: sy, w: sw, h: sh });
+    const bounds = this.liveScreenBounds(node);
+    this.cb.onSelRect?.(bounds);
     if (this.editingTitle) return; // don't fight the inline editor
     const asset = this.assets.get(p.assetId);
     const name = asset ? asset.path.split(/[/\\]/).pop() ?? asset.path : "image";
     el.dataset.pid = id;
     if (el.textContent !== name) el.textContent = name;
-    el.style.left = `${sx}px`;
-    el.style.top = `${sy}px`;
+    el.style.left = `${bounds.x}px`;
+    el.style.top = `${bounds.y}px`;
     el.style.display = "block";
   }
 
@@ -995,7 +1329,7 @@ export class CanvasScene {
       g.cursor = cursors[i];
       g.hitArea = new Rectangle(-9, -9, 18, 18);
       g.visible = false;
-      g.on("pointerdown", (e: FederatedPointerEvent) => this.onHandleDown("resize", e));
+      g.on("pointerdown", (e: FederatedPointerEvent) => this.onHandleDown("resize", e, i));
       this.handleLayer.addChild(g);
       this.cornerHandles.push(g);
     }
@@ -1031,14 +1365,9 @@ export class CanvasScene {
       const wy = cy + lx * sin + ly * cos;
       return [this.cam.x + wx * this.cam.scale, this.cam.y + wy * this.cam.scale];
     };
-    const locals: [number, number][] = [
-      [-hw, -hh],
-      [hw, -hh],
-      [hw, hh],
-      [-hw, hh],
-    ];
     for (let i = 0; i < 4; i++) {
-      const [sx, sy] = toScreen(locals[i][0], locals[i][1]);
+      const [cxSign, cySign] = CORNER_SIGNS[i];
+      const [sx, sy] = toScreen(cxSign * hw, cySign * hh);
       this.cornerHandles[i].position.set(sx, sy);
       this.cornerHandles[i].visible = true;
     }
@@ -1050,22 +1379,46 @@ export class CanvasScene {
     }
   }
 
-  private onHandleDown(kind: "resize" | "rotate", e: FederatedPointerEvent): void {
+  private onHandleDown(kind: "resize" | "rotate", e: FederatedPointerEvent, handleIndex = 0): void {
     if (e.button !== 0) return;
     e.stopPropagation();
+    this.clearSnapGuides();
     const id = this.selected.size === 1 ? [...this.selected][0] : null;
     const p = id ? this.placements.get(id) : null;
-    if (!id || !p) return;
+    const node = id ? this.nodes.get(id) : null;
+    if (!id || !p || !node) return;
     const pw = this.screenToWorld(e.global.x, e.global.y);
+    const [cornerX, cornerY] = CORNER_SIGNS[handleIndex];
+    const anchorLocalX = (-cornerX * node.w) / 2;
+    const anchorLocalY = (-cornerY * node.h) / 2;
+    const centerLocalX = (cornerX * node.w) / 2;
+    const centerLocalY = (cornerY * node.h) / 2;
+    const diagLocalX = cornerX * node.w;
+    const diagLocalY = cornerY * node.h;
+    const cos = Math.cos(p.rotation);
+    const sin = Math.sin(p.rotation);
+    const anchorX = p.x + (anchorLocalX * cos - anchorLocalY * sin) * p.scale;
+    const anchorY = p.y + (anchorLocalX * sin + anchorLocalY * cos) * p.scale;
+    const centerUnitX = centerLocalX * cos - centerLocalY * sin;
+    const centerUnitY = centerLocalX * sin + centerLocalY * cos;
+    const diagX = diagLocalX * cos - diagLocalY * sin;
+    const diagY = diagLocalX * sin + diagLocalY * cos;
+    const diagLength = Math.max(1e-3, Math.hypot(diagX, diagY));
     this.xform = {
       id,
       cx: p.x,
       cy: p.y,
-      startScale: p.scale,
       startRot: p.rotation,
-      startDist: Math.max(1e-3, Math.hypot(pw.x - p.x, pw.y - p.y)),
       startAngle: Math.atan2(pw.y - p.y, pw.x - p.x),
+      anchorX,
+      anchorY,
+      centerUnitX,
+      centerUnitY,
+      diagUnitX: diagX / diagLength,
+      diagUnitY: diagY / diagLength,
+      diagLength,
     };
+    this.dragStart = { x: e.global.x, y: e.global.y };
     this.mode = kind;
     this.moved = false;
   }
@@ -1086,7 +1439,51 @@ export class CanvasScene {
       canvas.addEventListener("wheel", this.onWheel, { passive: false });
       // Native right-click → custom context menu (suppress the browser menu).
       canvas.addEventListener("contextmenu", this.onContextMenuDom);
+      canvas.addEventListener("auxclick", this.onAuxClickDom);
     }
+    window.addEventListener("keydown", this.onKeyDown);
+    window.addEventListener("keyup", this.onKeyUp);
+  }
+
+  private editableTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  }
+
+  private onKeyDown = (e: KeyboardEvent): void => {
+    if (e.code !== "Space" || this.editableTarget(e.target)) return;
+    if (this.cropActive) return;
+    if (document.querySelector(".cm-ctx, .cm-modal-backdrop, .cm-gallery-backdrop, .cm-gdetail-backdrop, .cm-compare")) return;
+    e.preventDefault();
+    if (!this.spacePan) {
+      this.spacePan = true;
+      this.refreshCursor();
+    }
+  };
+
+  private onKeyUp = (e: KeyboardEvent): void => {
+    if (e.code !== "Space") return;
+    this.spacePan = false;
+    this.refreshCursor();
+  };
+
+  private onAuxClickDom = (e: MouseEvent): void => {
+    if (e.button === 1) e.preventDefault();
+  };
+
+  private pointerDistanceFrom(start: { x: number; y: number }, x: number, y: number): number {
+    return Math.hypot(x - start.x, y - start.y);
+  }
+
+  private beginPan(e: FederatedPointerEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+    this.clearSnapGuides();
+    this.marqueeGfx.clear();
+    this.mode = "pan";
+    this.moved = false;
+    this.lastPointer = { x: e.global.x, y: e.global.y };
+    this.refreshCursor();
   }
 
   /** Right-click: hit-test the topmost image under the cursor → image menu;
@@ -1097,23 +1494,7 @@ export class CanvasScene {
     const rect = this.canvasEl.getBoundingClientRect();
     const worldX = (e.clientX - rect.left - this.cam.x) / this.cam.scale;
     const worldY = (e.clientY - rect.top - this.cam.y) / this.cam.scale;
-    let hitId: string | null = null;
-    let hitZ = -Infinity;
-    for (const [id, node] of this.nodes) {
-      const p = this.placements.get(id);
-      if (!p) continue;
-      const cx = node.container.position.x;
-      const cy = node.container.position.y;
-      const sc = node.container.scale.x;
-      const halfW = (node.w * sc) / 2;
-      const halfH = (node.h * sc) / 2;
-      if (worldX >= cx - halfW && worldX <= cx + halfW && worldY >= cy - halfH && worldY <= cy + halfH) {
-        if (p.z >= hitZ) {
-          hitZ = p.z;
-          hitId = id;
-        }
-      }
-    }
+    const hitId = this.hitNodeAtWorld(worldX, worldY);
     if (hitId) {
       if (!this.selected.has(hitId)) this.commitSelection(new Set([hitId]));
       this.cb.onContextMenu?.({ kind: "image", placementId: hitId, x: e.clientX, y: e.clientY });
@@ -1122,10 +1503,39 @@ export class CanvasScene {
     }
   };
 
+  private hitNodeAtWorld(worldX: number, worldY: number): string | null {
+    let hitId: string | null = null;
+    let hitZ = -Infinity;
+    for (const [id, node] of this.nodes) {
+      const p = this.placements.get(id);
+      if (!p) continue;
+      const cx = node.container.position.x;
+      const cy = node.container.position.y;
+      const sc = node.container.scale.x;
+      const rot = node.container.rotation;
+      const dx = worldX - cx;
+      const dy = worldY - cy;
+      const cos = Math.cos(-rot);
+      const sin = Math.sin(-rot);
+      const localX = (dx * cos - dy * sin) / sc;
+      const localY = (dx * sin + dy * cos) / sc;
+      if (Math.abs(localX) <= node.w / 2 && Math.abs(localY) <= node.h / 2 && p.z >= hitZ) {
+        hitZ = p.z;
+        hitId = id;
+      }
+    }
+    return hitId;
+  }
+
   private onNodePointerDown(id: string, e: FederatedPointerEvent): void {
-    if (e.button !== 0) return;
     if (this.cropActive) return; // only the crop frame is interactive while cropping
+    if (e.button === 1 || (e.button === 0 && this.spacePan)) {
+      this.beginPan(e);
+      return;
+    }
+    if (e.button !== 0) return;
     e.stopPropagation();
+    this.clearSnapGuides();
 
     // Clicking a different image while cropping cancels crop.
     if (this.cropId && this.cropId !== id) {
@@ -1138,6 +1548,7 @@ export class CanvasScene {
       if (!node) return;
       this.mode = "crop";
       this.moved = false;
+      this.dragStart = { x: e.global.x, y: e.global.y };
       const local = node.container.toLocal(e.global);
       this.annoStartLocal = { x: local.x, y: local.y };
       this.annoEndLocal = { x: local.x, y: local.y };
@@ -1182,6 +1593,7 @@ export class CanvasScene {
       if (next.has(id)) next.delete(id);
       else next.add(id);
       this.commitSelection(next);
+      return;
     } else if (!this.selected.has(id)) {
       this.commitSelection(new Set([id]));
     }
@@ -1198,8 +1610,13 @@ export class CanvasScene {
   }
 
   private onStagePointerDown(e: FederatedPointerEvent): void {
-    if (e.button !== 0) return;
     if (this.cropActive) return; // crop mode: ignore canvas marquee/deselect
+    if (e.button === 1 || (e.button === 0 && this.spacePan)) {
+      this.beginPan(e);
+      return;
+    }
+    if (e.button !== 0) return;
+    this.clearSnapGuides();
     if (this.cropId) {
       this.cb.onCropCancel?.(); // click on empty space cancels crop
       return;
@@ -1217,33 +1634,63 @@ export class CanvasScene {
     const gx = e.global.x;
     const gy = e.global.y;
 
-    if (this.mode === "drag") {
+    if (this.mode === "pan") {
+      if (!this.moved) {
+        if (this.pointerDistanceFrom(this.lastPointer, gx, gy) < DRAG_START_THRESHOLD_PX) return;
+        this.moved = true;
+      }
+      this.cam.x += gx - this.lastPointer.x;
+      this.cam.y += gy - this.lastPointer.y;
+      this.lastPointer = { x: gx, y: gy };
+      this.applyCamera();
+    } else if (this.mode === "drag") {
       const dx = (gx - this.dragStart.x) / this.cam.scale;
       const dy = (gy - this.dragStart.y) / this.cam.scale;
-      if (Math.abs(gx - this.dragStart.x) + Math.abs(gy - this.dragStart.y) > 2) this.moved = true;
+      if (!this.moved) {
+        if (this.pointerDistanceFrom(this.dragStart, gx, gy) < DRAG_START_THRESHOLD_PX) return;
+        this.moved = true;
+      }
+      const snapped = this.snapDrag(dx, dy);
+      this.drawSnapGuides(snapped.guides);
       for (const [sid, origin] of this.dragOrigin) {
         const node = this.nodes.get(sid);
-        if (node) node.container.position.set(origin.x + dx, origin.y + dy);
+        if (node) node.container.position.set(origin.x + snapped.dx, origin.y + snapped.dy);
       }
     } else if (this.mode === "resize") {
       const node = this.nodes.get(this.xform.id);
       if (node) {
+        if (!this.moved) {
+          if (this.pointerDistanceFrom(this.dragStart, gx, gy) < HANDLE_START_THRESHOLD_PX) return;
+          this.moved = true;
+        }
         const pw = this.screenToWorld(gx, gy);
-        const dist = Math.hypot(pw.x - this.xform.cx, pw.y - this.xform.cy);
-        const ns = clamp(this.xform.startScale * (dist / this.xform.startDist), MIN_SCALE, MAX_SCALE);
-        node.container.scale.set(ns);
-        this.moved = true;
+        const projected =
+          (pw.x - this.xform.anchorX) * this.xform.diagUnitX +
+          (pw.y - this.xform.anchorY) * this.xform.diagUnitY;
+        const ns = this.snapResize(clamp(projected / this.xform.diagLength, MIN_SCALE, MAX_SCALE));
+        this.drawSnapGuides(ns.guides);
+        node.container.position.set(
+          this.xform.anchorX + this.xform.centerUnitX * ns.scale,
+          this.xform.anchorY + this.xform.centerUnitY * ns.scale
+        );
+        node.container.scale.set(ns.scale);
       }
     } else if (this.mode === "rotate") {
       const node = this.nodes.get(this.xform.id);
       if (node) {
+        if (!this.moved) {
+          if (this.pointerDistanceFrom(this.dragStart, gx, gy) < HANDLE_START_THRESHOLD_PX) return;
+          this.moved = true;
+        }
         const pw = this.screenToWorld(gx, gy);
         const ang = Math.atan2(pw.y - this.xform.cy, pw.x - this.xform.cx);
         node.container.rotation = this.xform.startRot + (ang - this.xform.startAngle);
-        this.moved = true;
       }
     } else if (this.mode === "marquee") {
-      this.moved = true;
+      if (!this.moved) {
+        if (this.pointerDistanceFrom(this.marqueeStart, gx, gy) < MARQUEE_START_THRESHOLD_PX) return;
+        this.moved = true;
+      }
       this.lastPointer = { x: gx, y: gy };
       this.drawMarquee(this.marqueeStart.x, this.marqueeStart.y, gx, gy);
     } else if (this.mode === "annotate") {
@@ -1274,9 +1721,12 @@ export class CanvasScene {
     } else if (this.mode === "crop") {
       const node = this.cropId ? this.nodes.get(this.cropId) : null;
       if (node && this.annoTemp) {
+        if (!this.moved) {
+          if (this.pointerDistanceFrom(this.dragStart, gx, gy) < MARQUEE_START_THRESHOLD_PX) return;
+          this.moved = true;
+        }
         const local = node.container.toLocal(e.global);
         this.annoEndLocal = { x: local.x, y: local.y };
-        this.moved = true;
         this.drawCropRect(node, this.annoTemp);
       }
     }
@@ -1307,8 +1757,8 @@ export class CanvasScene {
         this.cb.onCommitMoves?.([
           {
             id: this.xform.id,
-            x: p.x,
-            y: p.y,
+            x: node.container.position.x,
+            y: node.container.position.y,
             scale: node.container.scale.x,
             rotation: node.container.rotation,
             z: p.z,
@@ -1365,7 +1815,9 @@ export class CanvasScene {
       }
       this.markDrag = null;
     }
+    this.clearSnapGuides();
     this.mode = "idle";
+    this.refreshCursor();
   }
 
   private drawMarquee(x0: number, y0: number, x1: number, y1: number): void {
@@ -1389,13 +1841,11 @@ export class CanvasScene {
     const minY = Math.min(a.y, b.y);
     const maxY = Math.max(a.y, b.y);
     const picked = new Set<string>();
-    for (const [id, node] of this.nodes) {
-      const p = this.placements.get(id);
-      if (!p) continue;
-      const hw = (node.w * p.scale) / 2;
-      const hh = (node.h * p.scale) / 2;
+    for (const id of this.nodes.keys()) {
+      const bounds = this.currentPlacementBounds(id);
+      if (!bounds) continue;
       const intersects =
-        p.x + hw >= minX && p.x - hw <= maxX && p.y + hh >= minY && p.y - hh <= maxY;
+        bounds.maxX >= minX && bounds.minX <= maxX && bounds.maxY >= minY && bounds.minY <= maxY;
       if (intersects) picked.add(id);
     }
     if (this.marqueeAdditive) for (const id of this.selected) picked.add(id);
@@ -1424,6 +1874,10 @@ export class CanvasScene {
     this.cam.x = sx - wx * newScale;
     this.cam.y = sy - wy * newScale;
     this.applyCamera();
+  }
+
+  screenToWorldPoint(sx: number, sy: number): { x: number; y: number } {
+    return this.screenToWorld(sx, sy);
   }
 
   private screenToWorld(sx: number, sy: number): { x: number; y: number } {
@@ -1463,7 +1917,10 @@ export class CanvasScene {
     if (this.canvasEl) {
       this.canvasEl.removeEventListener("wheel", this.onWheel);
       this.canvasEl.removeEventListener("contextmenu", this.onContextMenuDom);
+      this.canvasEl.removeEventListener("auxclick", this.onAuxClickDom);
     }
+    window.removeEventListener("keydown", this.onKeyDown);
+    window.removeEventListener("keyup", this.onKeyUp);
     if (this.inited) {
       try {
         this.app.destroy(true, { children: true });

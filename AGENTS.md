@@ -146,28 +146,11 @@ pnpm tauri dev                  # 有 UI 改动时烟测
 
 ---
 
-## 当前在做 / 待定
-
-> 全部产品决策都已锁。技术上仍有几项 maintainer 拍板的「看效果再说」：
-
-- **SP-3 画布性能** —— 已确认 WebGL2 / 59fps（gpu=no 走 WebGL2 基线），200×2048 压力 + VRAM
-  eviction 调优是后续工作（TextureGC / mipmap / 视口剔除）。
-- **OQ-4 候选落点**：托盘 vs 直接平铺。
-- **OQ-5 预设清单细化**：去背景 / 扩图 / 胶片相机风滤镜（可批量套真人照）。
-- **OQ-6 文件夹↔画布同步语义**。
-- **OQ-D1 画布底色辨识度**：浅底 `#F5F5F7` 已上线，看用户反馈再决定要不要给浅色图加描边。
-
-**这些未定前不要擅自开工对应模块 —— 先问用户**。
-
----
-
 ## 提交规范
 
-- **Commit**：祈使句、首字母大写、无句号；有意义的改动写 body 说明 why；结尾加
-  `Co-Authored-By: Codex Opus 4.7 (1M context) <noreply@anthropic.com>`。
+- **Commit**：祈使句、首字母大写、无句号；有意义的改动写 body 说明 why
 - **文档**：specs 用中文（技术名词保留英文），与现有文档一致。
-- **schema / 存储**：任何动 `.cameo/` 布局或 Board doc 形状的改动都是 versioned change，加
-  迁移函数。
+- **schema / 存储**：任何动 `.cameo/` 布局或 Board doc 形状的改动都是 versioned change，加迁移函数。
 - **协议**：AGPL-3.0 —— 任何外部依赖 / 引入代码请确认许可证兼容。
 
 ---

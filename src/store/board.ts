@@ -27,7 +27,9 @@ interface BoardState {
   openBoard: (path: string) => Promise<void>;
   /** Import + place; returns the new placements (so the composer can pill them). */
   importFiles: (paths: string[]) => Promise<Placement[]>;
+  importFilesAt: (paths: string[], center: { x: number; y: number }) => Promise<Placement[]>;
   importBytes: (bytes: Uint8Array, ext: string, stem: string) => Promise<Placement[]>;
+  importBytesAt: (bytes: Uint8Array, ext: string, stem: string, center: { x: number; y: number }) => Promise<Placement[]>;
   /** Merge an already-completed Rust import (assets + placements) into local
    *  state, pushing the standard import-undo step. Used by side paths that
    *  invoked their own dedicated Rust importer (e.g. `import_chat_image_to_canvas`)
@@ -98,6 +100,34 @@ function mergeImport(state: BoardState, result: ImportResult) {
   return { assets, placements };
 }
 
+function centerImport(state: BoardState, result: ImportResult, center: { x: number; y: number }): ImportResult {
+  if (result.placements.length === 0) return result;
+  const assets = new Map(state.assets);
+  for (const a of result.assets) assets.set(a.id, a);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of result.placements) {
+    const asset = assets.get(p.assetId);
+    const halfW = ((asset?.width ?? 1) * p.scale) / 2;
+    const halfH = ((asset?.height ?? 1) * p.scale) / 2;
+    minX = Math.min(minX, p.x - halfW);
+    minY = Math.min(minY, p.y - halfH);
+    maxX = Math.max(maxX, p.x + halfW);
+    maxY = Math.max(maxY, p.y + halfH);
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return result;
+  }
+  const dx = center.x - (minX + maxX) / 2;
+  const dy = center.y - (minY + maxY) / 2;
+  return {
+    assets: result.assets,
+    placements: result.placements.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })),
+  };
+}
+
 export const useBoardStore = create<BoardState>((set, get) => ({
   boardId: null,
   folder: null,
@@ -148,6 +178,29 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     }
   },
 
+  importFilesAt: async (paths, center) => {
+    const { boardId } = get();
+    if (!boardId || paths.length === 0) return [];
+    try {
+      const result = centerImport(get(), await ipc.importPaths(boardId, paths), center);
+      set((s) => mergeImport(s, result));
+      pushImportUndo(boardId, result.placements, set);
+      const updates = result.placements.map((p) => ({
+        id: p.id,
+        x: p.x,
+        y: p.y,
+        scale: p.scale,
+        rotation: p.rotation,
+        z: p.z,
+      }));
+      if (updates.length) void ipc.updatePlacements(boardId, updates).catch((e) => set({ error: String(e) }));
+      return result.placements;
+    } catch (e) {
+      set({ error: String(e) });
+      return [];
+    }
+  },
+
   importBytes: async (bytes, ext, stem) => {
     const { boardId } = get();
     if (!boardId) return [];
@@ -155,6 +208,29 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const result = await ipc.importImageBytes(boardId, Array.from(bytes), ext, stem);
       set((s) => mergeImport(s, result));
       pushImportUndo(boardId, result.placements, set);
+      return result.placements;
+    } catch (e) {
+      set({ error: String(e) });
+      return [];
+    }
+  },
+
+  importBytesAt: async (bytes, ext, stem, center) => {
+    const { boardId } = get();
+    if (!boardId) return [];
+    try {
+      const result = centerImport(get(), await ipc.importImageBytes(boardId, Array.from(bytes), ext, stem), center);
+      set((s) => mergeImport(s, result));
+      pushImportUndo(boardId, result.placements, set);
+      const updates = result.placements.map((p) => ({
+        id: p.id,
+        x: p.x,
+        y: p.y,
+        scale: p.scale,
+        rotation: p.rotation,
+        z: p.z,
+      }));
+      if (updates.length) void ipc.updatePlacements(boardId, updates).catch((e) => set({ error: String(e) }));
       return result.placements;
     } catch (e) {
       set({ error: String(e) });

@@ -60,7 +60,7 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
 | 桌面壳 | **Tauri 2** | 轻、Rust 后端、原生菜单/托盘/更新器都有，跨 mac/win 一份代码 |
 | UI chrome | **React 19** + Zustand v5 | 团队熟、生态全；状态库选 Zustand 是因为不想要 Redux 模板 |
 | 画布渲染 | **PixiJS v8**（WebGL2 基线，WebGPU 自动启用）| 不选 Vello（alpha + 大图弱）、egui（大图卡）、GPUI（单公司）|
-| 图片协议 | 自定义 `cameo://` URI | 路径规范化 + 防穿越；Rust 解码 / 降采样 / mipmap |
+| 图片协议 | 自定义 `cameo://localhost/<boardId>/…` URI | boardId 放 path（兼容 Windows WebView2 的 `http://cameo.localhost/…` 形态）+ 路径规范化 + 防穿越 |
 | Agent | **Codex `app-server`**（JSON-RPC over stdio）| 长驻进程 = stateful session，跟"每轮 respawn"完全不同 |
 | 鉴权 | `~/.codex` ChatGPT 订阅 | **无 API key**；Cameo 不接 OpenAI，能力来自用户已付费的 Codex |
 | 国际化 | 自研 `i18n/messages.ts`（key catalog）| 简单到不需要 i18next；en 是 source of truth |
@@ -143,7 +143,8 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
 **Codex 集成（详见 §5）**
 | 文件 | 行数 | 职责 |
 |---|---:|---|
-| `codex.rs` | 1044 | **核心**：spawn `codex app-server` → JSON-RPC `initialize` / `thread/start` / `turn/start` → drain items → 转 `UnifiedEvent` |
+| `codex.rs` | 1044 | **核心**：spawn `codex app-server` → JSON-RPC `initialize` / `thread/start` / `turn/start` + active-turn `turn/steer` → drain items → 转 `UnifiedEvent` |
+| `process.rs` | 31 | 子进程小工具；Windows 下给 Codex / taskkill 等 console 子进程加 `CREATE_NO_WINDOW` |
 | `runtime.rs` | 89 | runtime-agnostic 事件枚举：`UnifiedEvent`（SessionInit / TextDelta / Thinking* / Tool* / GenerationStarted / ImageGenerated / TurnComplete / RateLimits / …）|
 | `prompt.rs` | 32 | 系统提示 + 引用图块格式 |
 
@@ -151,7 +152,7 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
 | 文件 | 行数 | 职责 |
 |---|---:|---|
 | `assets.rs` | 184 | Asset 内容寻址（blake3）+ 缩略图生成（image crate → JPEG）|
-| `protocol.rs` | 82 | `cameo://` URI 处理：从 BoardRegistry 路由到磁盘文件，做路径规范化 / 防穿越 |
+| `protocol.rs` | 82 | `cameo://` URI 处理：从 BoardRegistry 路由到磁盘文件，兼容 Windows WebView2 host 变形，做路径规范化 / 防穿越 |
 | `paths.rs` | 100 | 文件系统布局：全局 `~/.cameo/` + 每 Board `.cameo/`，`CAMEO_HOME` 可覆盖（测试/便携）|
 
 **系统服务**
@@ -181,12 +182,12 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
 
 ```
 launch
-  └─ spawn `codex app-server`（PATH 已 augment：brew / cargo / npm-global / scoop）
+  └─ spawn `codex app-server`（PATH 已 augment：brew / cargo / npm/pnpm / nvm/fnm/asdf/mise/volta / scoop；GUI 启动兜底读 shell PATH）
   └─ JSON-RPC initialize（含 `initialized` 回握手）
   └─ thread/start  ──►  threadId（存进 SessionMeta）
                     ◄──  item/* stream（textDelta / thinking* / tool* / imageGeneration / …）
 
-user 发一条
+user 发第一条
   ├─ App 渲染选中的图为 clean PNG + overlay PNG（写到 `<folder>/.cameo/tmp/`）
   ├─ turn/start { content: [text, localImage(clean), localImage(overlay), …] }
   ├─ Codex 自己读图、推理、出图
@@ -195,6 +196,12 @@ user 发一条
   │    • 否则 base64 → import_bytes
   │    → 新 Asset + 新 Placement（在源右侧）+ 一条血缘
   └─ turn/completed
+
+active turn 中继续发
+  ├─ UI 立即追加用户消息，不把“正在生成”当成本地错误
+  ├─ 已拿到 active turn id → turn/steer { threadId, input, expectedTurnId }
+  ├─ turn/start 已发出但 turn id 尚未返回 → 本地 pending steer 队列暂存
+  └─ 收到 turn id 后按顺序 flush 到 Codex；是否接受由 Codex 的 active-turn steer 规则决定
 ```
 
 ### 5.2 事件模型 —— `UnifiedEvent`
@@ -211,7 +218,8 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 | `tool*` | chat store | 渲染工具调用行（detail 摘要 + 状态点）|
 | `generationStarted` | **board store** + chat store | board 加占位（让用户看到「位置已锁定」）；chat 加 generating block，**key = `placeholderId`** |
 | `imageGenerated` | **board store** + chat store | board apply 新 asset+placement；chat 用 `placeholderId` 匹配 generating block → promote 到 done（**`placement.id` ≠ `placeholderId`**，要用 placeholder 配对）|
-| `turnComplete` / `error` | chat store + watchdog | turnStatus → idle；watchdog stop |
+| `turnComplete` / `sessionComplete` / fatal `error` | chat store + watchdog | turnStatus → idle；watchdog stop |
+| `log` | chat store | 运行时诊断 note；**不**改变 turnStatus，不算 watchdog 进度 |
 | `rateLimits` | chat store | primary（5h）+ secondary（weekly）两窗口都更新 |
 | `permissionRequest` | Cameo 自动 accept | workspace-write 沙箱兜底（与 Riff 故意 deny 相反）|
 
@@ -219,6 +227,11 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 
 1. **Inactivity watchdog**（`src/lib/watchdog.ts`）—— 长时间没有"进度类"事件就认定卡死，
    触发自动重启。`PROGRESS_EVENT_KINDS` 白名单避免被 log/rateLimits 这种"心跳"误骗。
+   Codex 的 `"error"` notification 可能只是可恢复的 transport/runtime 诊断，适配层默认转成
+   `log`；真正结束一轮只信 `turn/completed`、`turn/start` RPC 失败、fatal runtime error 或
+   sidecar 退出。
+   同一个 active turn 里的后续用户输入走 Codex `turn/steer`，不用本地屏蔽；只有 Codex 明确拒绝
+   steering（例如 active turn 不可 steer）时才把该次发送标记失败。
 2. **Stop button 升级**（`stopTurn` in `chat.ts`）—— 3s 软取消窗口失败后 escalate 到 tree-kill；
    `stopEpoch` 计数器防止 orphan timer 打到下一轮 turn。
 3. **stderr 浮现**（`codex.rs::STDERR_SURFACE`）—— 已知失败行（401/403/网络/超时/限流/transport）

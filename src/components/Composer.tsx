@@ -45,7 +45,7 @@ export function Composer() {
   const [hasContent, setHasContent] = useState(false);
   const t = useT();
 
-  const ready = !!boardId && sessionStatus === "ready" && turnStatus === "idle";
+  const ready = !!boardId && sessionStatus === "ready";
   const running = turnStatus === "running";
 
   // ── pill resolution ────────────────────────────────────────────────────
@@ -425,15 +425,14 @@ export function Composer() {
             <ImagePlus size={17} />
           </button>
           <div className="cm-composer__barspacer" />
-          {running ? (
+          {running && (
             <button className="cm-send cm-send--stop" title={t("composer.stop")} onClick={stop}>
               <Square size={12} fill="currentColor" strokeWidth={0} />
             </button>
-          ) : (
-            <button className="cm-send" title={t("composer.send")} onClick={() => dispatch()} disabled={!ready || !hasContent}>
-              <ArrowUp size={18} />
-            </button>
           )}
+          <button className="cm-send" title={t("composer.send")} onClick={() => dispatch()} disabled={!ready || !hasContent}>
+            <ArrowUp size={18} />
+          </button>
         </div>
       </div>
     </div>

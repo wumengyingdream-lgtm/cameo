@@ -3,6 +3,24 @@
 User-facing release notes for Cameo. This file describes what changed from a
 user's point of view, rather than listing internal implementation details.
 
+## [0.1.1] - 2026-05-27
+
+### Improvements
+
+- The AI chat now renders Markdown more naturally, including readable headings,
+  lists, inline code, and lightweight code blocks with copy actions.
+- Image paths in AI replies can turn into image previews, and those previews can
+  be added to the canvas, used as references, copied, revealed in Finder, or
+  focused on the canvas when already present.
+- The chat panel is easier to read with larger message and input text, plus a
+  resizable width for longer replies.
+- Canvas selection, snapping, resizing, and drag thresholds feel steadier when
+  arranging images.
+- Codex session handling is more resilient, including better active-turn
+  steering, runtime discovery, and Windows image handling.
+
+---
+
 ## [0.1.0] - 2026-05-25
 
 ### First Public Release
