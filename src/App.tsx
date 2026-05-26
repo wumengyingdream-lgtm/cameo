@@ -300,7 +300,6 @@ export default function App() {
             ]);
           }
           const turn = useChatStore.getState().startTurn(testPrompt, refs);
-          if (!turn) return;
           try {
             const overlays = await buildOverlays(startedBoardId, refs);
             if (!isCurrentStart()) return;

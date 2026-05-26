@@ -22,8 +22,11 @@ import { InactivityWatchdog } from "../lib/watchdog";
 //      so the App-level effect rebuilds a fresh session. Stop ALWAYS clears
 //      the UI; codex's cooperation is optional.
 //
-// All three converge on `forceRestartSession()` — a single recovery path so
-// future flow additions don't accidentally drift from the invariant.
+// Watchdog and explicit Stop converge on `forceRestartSession()` — a single
+// recovery path so future flow additions don't accidentally drift from the
+// invariant. Recoverable runtime diagnostics stay as `log` notes and do not
+// settle the turn; terminal state comes from turnComplete/sessionComplete/fatal
+// Error events.
 
 const WATCHDOG_TIMEOUT_MS = 10 * 60 * 1000;   // 10 min
 const WATCHDOG_INTERVAL_MS = 30 * 1000;        // 30 s tick
@@ -218,9 +221,8 @@ function patchLast(
 
 // ── runtime stability — module-local helpers ────────────────────────────────
 //
-// All three convergence points (watchdog fire / explicit Stop escalation /
-// fatal error notification) end up here. Centralising the recovery is the
-// reason `turnStatus` can't get wedged: any single path is exhaustive enough.
+// Watchdog fire and explicit Stop escalation end up here. Centralising recovery
+// keeps `turnStatus` from wedging when one path fails.
 
 /** Convergence point. Splits into two halves:
  *
@@ -369,6 +371,20 @@ function settle(m: AsstMsg): AsstMsg {
   return { ...m, blocks };
 }
 
+/** Before same-turn steering opens a new assistant target, close the previous
+ *  streaming placeholder so late Codex deltas render after the latest user
+ *  input instead of above it. */
+function closeOpenAssistant(messages: ChatMessage[]): ChatMessage[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "assistant" || m.status !== "streaming") continue;
+    const next = messages.slice();
+    next[i] = { ...settle(m), status: "done" };
+    return next;
+  }
+  return messages;
+}
+
 /** Monotonic counter used by `stopTurn` to invalidate its own orphan
  *  escalation timer when a fresh turn starts before the timer fires. */
 let stopEpoch = 0;
@@ -441,7 +457,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   startTurn: (text, refs) => {
     const userMsg: ChatMessage = { id: newId(), role: "user", text, refs };
     const asstMsg: ChatMessage = { id: newId(), role: "assistant", blocks: [], status: "streaming" };
-    set((st) => ({ turnStatus: "running", messages: [...st.messages, userMsg, asstMsg] }));
+    set((st) => ({
+      turnStatus: "running",
+      messages: [...(st.turnStatus === "running" ? closeOpenAssistant(st.messages) : st.messages), userMsg, asstMsg],
+    }));
     // Arm the inactivity watchdog for this turn. Every subsequent runtime
     // event will touch() it; absent any event for WATCHDOG_TIMEOUT_MS we'll
     // force-restart the session (see forceRestartSession + watchdog.onFire).
@@ -502,7 +521,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Reset the inactivity clock on PROGRESS events only — `log` warnings,
     // `rateLimits` pings, `usage` summaries and `permissionRequest` waiting
     // are not proof the turn is making progress, so they don't count. Terminal
-    // events (turnComplete / error / sessionComplete) stop the watchdog inside
+    // events (turnComplete / fatal error / sessionComplete) stop the watchdog inside
     // their own case body. New event kinds added in the future must opt in
     // here AND, if terminal, call `watchdog.stop()` in the case body.
     if (PROGRESS_EVENT_KINDS.has(e.kind)) watchdog.touch();
@@ -615,13 +634,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
             })),
           };
         case "error":
-          // CRITICAL: an `error` notification means this turn is dead. Flip
-          // turnStatus to idle so the UI can recover. Previously this only
-          // settled the message blocks while leaving turnStatus="running",
-          // which is how users got stuck in the "Working…" state.
+          // Fatal runtime errors are distinct from recoverable Codex diagnostics
+          // (those arrive as `log`). A fatal error means this turn is dead.
           watchdog.stop();
           return {
             turnStatus: "idle",
+            error: e.message,
             messages: updateLast(st.messages, (m) => ({ ...settle(m), status: "error", error: e.message })),
           };
         case "planUpdated":
@@ -638,7 +656,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           };
         case "log":
           // Surface warnings/errors as an inline note block in the stream.
-          if (e.level === "warn" || e.level === "error") {
+          if (st.turnStatus === "running" && (e.level === "warn" || e.level === "error")) {
             return { messages: updateLast(st.messages, (m) => pushBlock(m, { type: "note", level: e.level, text: e.message })) };
           }
           return {};

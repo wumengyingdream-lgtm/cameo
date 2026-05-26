@@ -532,6 +532,8 @@ function AssistantMessage({ m, thumb }: {
   // <StreamingStatus /> at the bottom of the chat panel which stays visible
   // for the entire turn (not just until the first block arrives).
   const t = useT();
+  if (m.status === "done" && m.blocks.length === 0) return null;
+
   // Set is recreated on every render — that's correct for chat-image dedup:
   // we want first-occurrence-renders-as-image semantics within ONE message,
   // not persisted state. Mutated by Block's text branch as it walks blocks.

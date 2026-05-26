@@ -71,6 +71,8 @@ pub enum UnifiedEvent {
         reached: Option<String>,
     },
     Status { state: String },
+    /// Fatal runtime failure. Recoverable runtime diagnostics are `Log` events;
+    /// turn state should normally settle through `TurnComplete`.
     Error { message: String },
     /// Process exited / session ended.
     SessionComplete { ok: bool, message: String },

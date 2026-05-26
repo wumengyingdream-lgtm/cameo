@@ -24,7 +24,11 @@ export function useCodexEvents() {
         void ipc.frontLog("info", `generating placeholder shown ${event.placeholderId}`);
       } else if (event.kind === "imageGenerated") {
         board.addGenerated(event.asset, event.placement, event.placeholderId);
-      } else if (event.kind === "turnComplete") {
+      } else if (
+        event.kind === "turnComplete" ||
+        event.kind === "sessionComplete" ||
+        event.kind === "error"
+      ) {
         board.clearPlaceholders();
       }
       useChatStore.getState().handleEvent(event);
