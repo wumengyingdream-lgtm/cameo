@@ -20,11 +20,14 @@ use base64::Engine;
 use parking_lot::Mutex as PlMutex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+#[cfg(not(windows))]
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
@@ -33,46 +36,243 @@ use tokio::sync::Mutex as TokioMutex;
 
 // ── PATH resolution (GUI apps get a minimal PATH; augment + `which`) ─────────
 
-fn augmented_path() -> String {
-    // GUI-launched apps inherit a stripped PATH (notably macOS .app bundles), so
-    // prepend the well-known toolchain bin dirs where `codex` tends to live, then
-    // fall back to the inherited PATH. Joined with the platform separator
-    // (`;` on Windows, `:` elsewhere) via `std::env::join_paths` — never hardcode.
-    let mut parts: Vec<PathBuf> = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        for d in [".local/bin", ".cargo/bin", ".bun/bin", ".deno/bin"] {
-            parts.push(home.join(d));
-        }
-        // Windows: npm global (`npm i -g @openai/codex`) and scoop shims sit
-        // under the user profile. `which` resolves the `.cmd`/`.exe` via PATHEXT.
-        #[cfg(windows)]
-        for d in ["AppData/Roaming/npm", "scoop/shims"] {
-            parts.push(home.join(d));
-        }
+#[cfg(not(windows))]
+const SHELL_PATH_TIMEOUT: Duration = Duration::from_secs(3);
+const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone)]
+struct ResolvedCodex {
+    path: PathBuf,
+    search_path: String,
+}
+
+fn push_unique(parts: &mut Vec<PathBuf>, path: PathBuf) {
+    if path.as_os_str().is_empty() || parts.iter().any(|p| p == &path) {
+        return;
     }
-    #[cfg(not(windows))]
+    parts.push(path);
+}
+
+fn push_split_path(parts: &mut Vec<PathBuf>, path: &OsStr) {
+    for p in std::env::split_paths(path) {
+        push_unique(parts, p);
+    }
+}
+
+#[cfg(not(windows))]
+fn push_unix_fallback_paths(parts: &mut Vec<PathBuf>) {
+    if let Some(home) = dirs::home_dir() {
+        for d in [
+            ".local/bin",
+            ".cargo/bin",
+            ".bun/bin",
+            ".deno/bin",
+            ".npm-global/bin",
+            ".volta/bin",
+            "Library/pnpm",
+            ".asdf/shims",
+            ".local/share/mise/shims",
+            ".local/share/fnm/aliases/default/bin",
+        ] {
+            push_unique(parts, home.join(d));
+        }
+        push_nvm_paths(parts, &home);
+    }
+
     for d in [
         "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
         "/usr/local/bin",
+        "/usr/local/sbin",
         "/usr/bin",
         "/bin",
         "/usr/sbin",
         "/sbin",
     ] {
-        parts.push(PathBuf::from(d));
+        push_unique(parts, PathBuf::from(d));
     }
+}
+
+#[cfg(not(windows))]
+fn push_nvm_paths(parts: &mut Vec<PathBuf>, home: &Path) {
+    let node_versions = home.join(".nvm").join("versions").join("node");
+    let Ok(entries) = std::fs::read_dir(node_versions) else {
+        return;
+    };
+    let mut versions: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    versions.sort_by(|a, b| {
+        node_version_key(b)
+            .cmp(&node_version_key(a))
+            .then_with(|| b.cmp(a))
+    });
+    for version in versions {
+        push_unique(parts, version.join("bin"));
+    }
+}
+
+#[cfg(not(windows))]
+fn node_version_key(path: &Path) -> Vec<u64> {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .trim_start_matches('v')
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|p| p.parse::<u64>().ok())
+        .collect()
+}
+
+#[cfg(windows)]
+fn push_windows_fallback_paths(parts: &mut Vec<PathBuf>) {
+    if let Some(home) = dirs::home_dir() {
+        for d in [
+            ".local/bin",
+            ".cargo/bin",
+            ".bun/bin",
+            ".deno/bin",
+            "AppData/Roaming/npm",
+            "AppData/Local/pnpm",
+            "AppData/Local/Volta/bin",
+            "scoop/shims",
+        ] {
+            push_unique(parts, home.join(d));
+        }
+    }
+    for var in ["APPDATA", "LOCALAPPDATA"] {
+        if let Some(root) = std::env::var_os(var).map(PathBuf::from) {
+            if var == "APPDATA" {
+                push_unique(parts, root.join("npm"));
+            } else {
+                push_unique(parts, root.join("pnpm"));
+                push_unique(parts, root.join("Volta").join("bin"));
+                push_unique(parts, root.join("Programs").join("nodejs"));
+            }
+        }
+    }
+    for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = std::env::var_os(var).map(PathBuf::from) {
+            push_unique(parts, root.join("nodejs"));
+        }
+    }
+}
+
+fn build_augmented_path(include_shell_path: bool) -> String {
+    #[cfg(windows)]
+    let _ = include_shell_path;
+    let mut parts: Vec<PathBuf> = Vec::new();
     if let Some(existing) = std::env::var_os("PATH") {
-        parts.extend(std::env::split_paths(&existing));
+        push_split_path(&mut parts, &existing);
     }
+    #[cfg(not(windows))]
+    if include_shell_path {
+        if let Some(shell_path) = detect_shell_path() {
+            push_split_path(&mut parts, OsStr::new(&shell_path));
+        }
+    }
+    #[cfg(not(windows))]
+    push_unix_fallback_paths(&mut parts);
+    #[cfg(windows)]
+    push_windows_fallback_paths(&mut parts);
+
     std::env::join_paths(&parts)
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|_| std::env::var("PATH").unwrap_or_default())
 }
 
-fn resolve_codex() -> Result<PathBuf, String> {
-    let path = augmented_path();
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    which::which_in("codex", Some(&path), cwd).map_err(|e| format!("codex not found in PATH: {e}"))
+#[cfg(not(windows))]
+fn detect_shell_path() -> Option<String> {
+    static CACHED: OnceLock<Option<String>> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+            let marker = format!("__CAMEO_PATH_{}__", std::process::id());
+            let script = format!("echo \"{marker}${{PATH}}{marker}\"");
+            let mut child = match std::process::Command::new(shell)
+                .args(["-i", "-l", "-c", &script])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(_) => return None,
+            };
+            let deadline = Instant::now() + SHELL_PATH_TIMEOUT;
+            let output = loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break child.wait_with_output().ok(),
+                    Ok(None) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return None;
+                    }
+                }
+            };
+            output.filter(|o| o.status.success()).and_then(|o| {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                extract_marked_path(&stdout, &marker)
+            })
+        })
+        .clone()
+}
+
+#[cfg(not(windows))]
+fn extract_marked_path(stdout: &str, marker: &str) -> Option<String> {
+    let start = stdout.find(marker)? + marker.len();
+    let end = stdout[start..].find(marker)? + start;
+    let path = stdout[start..end].trim();
+    (path.len() > 10).then(|| path.to_string())
+}
+
+fn resolve_codex_in(search_path: String) -> Result<ResolvedCodex, String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    which::which_in("codex", Some(&search_path), cwd)
+        .map(|path| ResolvedCodex { path, search_path })
+        .map_err(|e| format!("codex not found in augmented PATH: {e}"))
+}
+
+fn resolve_codex() -> Result<ResolvedCodex, String> {
+    let fallback_path = build_augmented_path(false);
+    match resolve_codex_in(fallback_path.clone()) {
+        Ok(found) => Ok(found),
+        Err(fallback_err) => {
+            #[cfg(not(windows))]
+            {
+                let shell_path = build_augmented_path(true);
+                if shell_path != fallback_path {
+                    return resolve_codex_in(shell_path).map_err(|shell_err| {
+                        format!("{shell_err}; fallback search also failed: {fallback_err}")
+                    });
+                }
+            }
+            Err(fallback_err)
+        }
+    }
+}
+
+fn command_output_with_timeout(
+    mut cmd: std::process::Command,
+    timeout: Duration,
+) -> Option<std::process::Output> {
+    let mut child = cmd.spawn().ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 /// Whether the Codex CLI is detected on this machine, and if so where + which
@@ -87,18 +287,20 @@ pub struct CodexInfo {
 
 pub fn detect() -> CodexInfo {
     match resolve_codex() {
-        Ok(p) => {
-            let version = std::process::Command::new(&p)
-                .arg("--version")
-                .env("PATH", augmented_path())
-                .output()
-                .ok()
+        Ok(resolved) => {
+            let mut cmd = std::process::Command::new(&resolved.path);
+            cmd.arg("--version")
+                .env("PATH", &resolved.search_path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let version = command_output_with_timeout(cmd, VERSION_TIMEOUT)
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .filter(|s| !s.is_empty());
             CodexInfo {
                 found: true,
-                path: Some(p.to_string_lossy().to_string()),
+                path: Some(resolved.path.to_string_lossy().to_string()),
                 version,
             }
         }
@@ -323,10 +525,10 @@ pub async fn start_session(
     let folder = board_reg.folder(&board_id).ok_or("unknown board")?;
     let codex = resolve_codex()?;
 
-    let mut cmd = tokio::process::Command::new(&codex);
+    let mut cmd = tokio::process::Command::new(&codex.path);
     cmd.arg("app-server")
         .current_dir(&folder)
-        .env("PATH", augmented_path())
+        .env("PATH", &codex.search_path)
         .env("PWD", &folder)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1334,4 +1536,72 @@ async fn handle_server_request(inner: &Arc<CodexSessionInner>, id: u64, method: 
         summary: method.to_string(),
     });
     inner.respond(id, json!({ "decision": "accept" })).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_unique_preserves_first_path() {
+        let mut parts = Vec::new();
+        push_unique(&mut parts, PathBuf::from("/a"));
+        push_unique(&mut parts, PathBuf::from("/b"));
+        push_unique(&mut parts, PathBuf::from("/a"));
+        assert_eq!(parts, vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn extract_marked_path_ignores_noisy_shell_output() {
+        let marker = "__CAMEO_PATH_TEST__";
+        let stdout = format!("banner\n{marker}/nvm/bin:/usr/local/bin:/usr/bin{marker}\n");
+        assert_eq!(
+            extract_marked_path(&stdout, marker).as_deref(),
+            Some("/nvm/bin:/usr/local/bin:/usr/bin")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn nvm_paths_are_added_newest_version_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        for version in ["v9.0.0", "v20.10.0", "v18.19.1"] {
+            std::fs::create_dir_all(
+                tmp.path()
+                    .join(".nvm")
+                    .join("versions")
+                    .join("node")
+                    .join(version),
+            )
+            .unwrap();
+        }
+
+        let mut parts = Vec::new();
+        push_nvm_paths(&mut parts, tmp.path());
+
+        assert_eq!(
+            parts,
+            vec![
+                tmp.path()
+                    .join(".nvm")
+                    .join("versions")
+                    .join("node")
+                    .join("v20.10.0")
+                    .join("bin"),
+                tmp.path()
+                    .join(".nvm")
+                    .join("versions")
+                    .join("node")
+                    .join("v18.19.1")
+                    .join("bin"),
+                tmp.path()
+                    .join(".nvm")
+                    .join("versions")
+                    .join("node")
+                    .join("v9.0.0")
+                    .join("bin"),
+            ]
+        );
+    }
 }

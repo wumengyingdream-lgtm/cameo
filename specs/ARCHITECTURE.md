@@ -181,7 +181,7 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
 
 ```
 launch
-  └─ spawn `codex app-server`（PATH 已 augment：brew / cargo / npm-global / scoop）
+  └─ spawn `codex app-server`（PATH 已 augment：brew / cargo / npm/pnpm / nvm/fnm/asdf/mise/volta / scoop；GUI 启动兜底读 shell PATH）
   └─ JSON-RPC initialize（含 `initialized` 回握手）
   └─ thread/start  ──►  threadId（存进 SessionMeta）
                     ◄──  item/* stream（textDelta / thinking* / tool* / imageGeneration / …）
