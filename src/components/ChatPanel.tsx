@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Plus, History, ChevronDown, ChevronUp, X, TriangleAlert, Image as ImageIcon, RefreshCw, Copy, ExternalLink } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChatStore, type ChatBlock, type ChatMessage, type RateLimit, type SessionStatus } from "../store/chat";
 import { useBoardStore } from "../store/board";
+import { CHAT_PANEL_MAX_WIDTH, CHAT_PANEL_MIN_WIDTH, useUiStore } from "../store/ui";
 import { cameoUrl, ipc } from "../lib/ipc";
 import type { Shape, CodexInfo } from "../types";
 import { Composer } from "./Composer";
 import { StreamingStatus } from "./StreamingStatus";
-import { ChatInlineImage } from "./ChatInlineImage";
-import { extractImageRefs } from "../lib/chatImageDetect";
+import { AssistantMarkdown } from "./AssistantMarkdown";
 import { useT, useLocaleStore } from "../i18n/locale";
 import type { MsgKey } from "../i18n/messages";
 import codexIcon from "../assets/codex.png";
@@ -556,9 +556,9 @@ function AssistantMessage({ m, thumb }: {
 }
 
 /**
- * Text body of an assistant message. Scans for inline image references
- * (markdown `![](path)` and plain path tokens with `/` + image ext) and
- * splits the run into a mix of plain text spans + ChatInlineImage cards.
+ * Text body of an assistant message. Markdown rendering stays isolated here
+ * so runtime events remain plain text blocks. Image references still resolve
+ * through ChatInlineImage inside AssistantMarkdown.
  *
  * Dedup: first occurrence of a path renders as an image; subsequent
  * mentions stay as text. The `seenPaths` set is shared across all text
@@ -567,42 +567,79 @@ function AssistantMessage({ m, thumb }: {
  * renders once.
  */
 function TextBlockRender({ text, seenPaths }: { text: string; seenPaths?: Set<string> }) {
-  const refs = extractImageRefs(text);
-  if (refs.length === 0) return <div className="cm-msg__text">{text}</div>;
-
-  const segments: React.ReactNode[] = [];
-  let cursor = 0;
-  refs.forEach((r, i) => {
-    if (r.start > cursor) segments.push(text.slice(cursor, r.start));
-    if (seenPaths && seenPaths.has(r.path)) {
-      // Already rendered as an image earlier in this message — keep this
-      // mention as plain text so the user can still see the original
-      // citation without a redundant thumbnail card.
-      segments.push(text.slice(r.start, r.end));
-    } else {
-      seenPaths?.add(r.path);
-      segments.push(<ChatInlineImage key={`img-${i}-${r.start}`} path={r.path} />);
-    }
-    cursor = r.end;
-  });
-  if (cursor < text.length) segments.push(text.slice(cursor));
-  return <div className="cm-msg__text">{segments}</div>;
+  return <AssistantMarkdown text={text} seenPaths={seenPaths} />;
 }
 
 export function ChatPanel() {
   const sessionStatus = useChatStore((s) => s.sessionStatus);
   const messages = useChatStore((s) => s.messages);
   const rateLimit = useChatStore((s) => s.rateLimit);
+  const chatWidth = useUiStore((s) => s.chatWidth);
+  const setChatWidth = useUiStore((s) => s.setChatWidth);
   const thumb = useThumb();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const cleanupResizeRef = useRef<(() => void) | null>(null);
+  const resizeFrameRef = useRef<number | null>(null);
+  const pendingWidthRef = useRef(chatWidth);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
+  useEffect(() => {
+    return () => {
+      cleanupResizeRef.current?.();
+      if (resizeFrameRef.current !== null) window.cancelAnimationFrame(resizeFrameRef.current);
+    };
+  }, []);
+
+  const beginResize = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = chatWidth;
+
+    const flushWidth = (next: number) => {
+      pendingWidthRef.current = next;
+      if (resizeFrameRef.current !== null) return;
+      resizeFrameRef.current = window.requestAnimationFrame(() => {
+        resizeFrameRef.current = null;
+        setChatWidth(pendingWidthRef.current);
+      });
+    };
+
+    const onMove = (move: PointerEvent) => {
+      const viewportMax = Math.max(CHAT_PANEL_MIN_WIDTH, window.innerWidth - 32);
+      const max = Math.min(CHAT_PANEL_MAX_WIDTH, viewportMax);
+      const next = Math.min(max, Math.max(CHAT_PANEL_MIN_WIDTH, startWidth + startX - move.clientX));
+      flushWidth(Math.round(next));
+    };
+
+    const finish = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      document.body.classList.remove("cm-chat-resizing");
+      cleanupResizeRef.current = null;
+    };
+
+    cleanupResizeRef.current?.();
+    cleanupResizeRef.current = finish;
+    document.body.classList.add("cm-chat-resizing");
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  }, [chatWidth, setChatWidth]);
+
   return (
-    <div className="cm-chat">
+    <div className="cm-chat" style={{ width: chatWidth }}>
+      <div
+        className="cm-chat__resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize chat"
+        onPointerDown={beginResize}
+      />
       <div className="cm-chat__header">
         <AgentStatus status={sessionStatus} rateLimit={rateLimit} />
         <div className="cm-chat__hspacer" />

@@ -26,6 +26,7 @@ export function CameoCanvas() {
   const cropRef = useRef<HTMLDivElement>(null);
   const [ctxMenu, setCtxMenu] = useState<CanvasContextTarget | null>(null);
   const chatOpen = useUiStore((s) => s.chatOpen);
+  const chatWidth = useUiStore((s) => s.chatWidth);
   const sidebarOpen = useWorkspaceStore((s) => s.sidebarOpen);
   const t = useT();
   const markComment = t("canvas.markComment");
@@ -201,11 +202,11 @@ export function CameoCanvas() {
   useEffect(() => {
     sceneRef.current?.setSafeInsets({
       left: sidebarOpen ? 252 : 0,
-      right: chatOpen ? 400 : 0,
+      right: chatOpen ? chatWidth + 20 : 0,
       top: 56,
       bottom: 72,
     });
-  }, [chatOpen, sidebarOpen]);
+  }, [chatOpen, chatWidth, sidebarOpen]);
 
   // Push localized canvas-overlay strings to the scene (re-applies on lang change).
   useEffect(() => {
