@@ -100,13 +100,7 @@ export function CanvasContextMenu({
   const paste = async () => {
     const bytes = await ipc.readClipboardImage();
     if (!bytes || !boardId) return;
-    const placements = await useBoardStore.getState().importBytes(new Uint8Array(bytes), "png", "pasted");
-    const p = placements[0];
-    if (p) {
-      void useBoardStore.getState().commitMoves([
-        { id: p.id, x: worldX, y: worldY, scale: p.scale, rotation: p.rotation, z: p.z },
-      ]);
-    }
+    await useBoardStore.getState().importBytesAt(new Uint8Array(bytes), "png", "pasted", { x: worldX, y: worldY });
   };
 
   return (

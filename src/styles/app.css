@@ -2029,7 +2029,12 @@ body,
 }
 .cm-cropip__area {
   position: absolute;
-  inset: 0;
+  left: var(--cm-crop-area-left, 0);
+  top: var(--cm-crop-area-top, 0);
+  width: var(--cm-crop-area-width, 100%);
+  height: var(--cm-crop-area-height, 100%);
+  transform: rotate(var(--cm-crop-area-rotation, 0rad));
+  transform-origin: center;
   overflow: hidden; /* clip the dim to the image area */
 }
 .cm-cropip__frame {

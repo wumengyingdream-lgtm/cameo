@@ -11,9 +11,44 @@ interface Rect {
   h: number;
 }
 type Corner = "tl" | "tr" | "br" | "bl";
+interface CropDrag {
+  mode: "move" | Corner;
+  sx: number;
+  sy: number;
+  start: Rect;
+  rotation: number;
+  areaW: number;
+  areaH: number;
+}
 const MIN = 0.05;
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const DEFAULT: Rect = { x: 0.05, y: 0.05, w: 0.9, h: 0.9 };
+
+const pxVar = (styles: CSSStyleDeclaration, name: string, fallback: number): number => {
+  const n = Number.parseFloat(styles.getPropertyValue(name));
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+
+const cropGeometry = (root: HTMLDivElement): Pick<CropDrag, "rotation" | "areaW" | "areaH"> => {
+  const styles = getComputedStyle(root);
+  const bounds = root.getBoundingClientRect();
+  return {
+    rotation: Number.parseFloat(styles.getPropertyValue("--cm-crop-area-rotation")) || 0,
+    areaW: pxVar(styles, "--cm-crop-area-width", bounds.width),
+    areaH: pxVar(styles, "--cm-crop-area-height", bounds.height),
+  };
+};
+
+const localDelta = (d: CropDrag, clientX: number, clientY: number): { dx: number; dy: number } => {
+  const screenDx = clientX - d.sx;
+  const screenDy = clientY - d.sy;
+  const cos = Math.cos(d.rotation);
+  const sin = Math.sin(d.rotation);
+  return {
+    dx: (screenDx * cos + screenDy * sin) / d.areaW,
+    dy: (-screenDx * sin + screenDy * cos) / d.areaH,
+  };
+};
 
 const PRESETS: { label: string; ratio: number | null }[] = [
   { label: "", ratio: null }, // label resolved via t("crop.free")
@@ -33,7 +68,7 @@ export function CropOverlay({ rootRef }: { rootRef: RefObject<HTMLDivElement | n
   const assets = useBoardStore((s) => s.assets);
   const boardId = useBoardStore((s) => s.boardId);
   const [crop, setCrop] = useState<Rect>(DEFAULT);
-  const drag = useRef<{ mode: "move" | Corner; sx: number; sy: number; start: Rect } | null>(null);
+  const drag = useRef<CropDrag | null>(null);
   const t = useT();
 
   useEffect(() => {
@@ -52,11 +87,8 @@ export function CropOverlay({ rootRef }: { rootRef: RefObject<HTMLDivElement | n
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
       const d = drag.current;
-      const root = rootRef.current;
-      if (!d || !root) return;
-      const r = root.getBoundingClientRect();
-      const dx = (e.clientX - d.sx) / r.width;
-      const dy = (e.clientY - d.sy) / r.height;
+      if (!d) return;
+      const { dx, dy } = localDelta(d, e.clientX, e.clientY);
       const s = d.start;
       setCrop(() => {
         if (d.mode === "move") {
@@ -100,7 +132,9 @@ export function CropOverlay({ rootRef }: { rootRef: RefObject<HTMLDivElement | n
   const startDrag = (mode: "move" | Corner) => (e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    drag.current = { mode, sx: e.clientX, sy: e.clientY, start: crop };
+    const root = rootRef.current;
+    if (!root) return;
+    drag.current = { mode, sx: e.clientX, sy: e.clientY, start: crop, ...cropGeometry(root) };
   };
   const applyRatio = (ratio: number | null) => {
     if (ratio == null || !a) return;

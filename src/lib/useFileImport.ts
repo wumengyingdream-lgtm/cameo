@@ -1,9 +1,19 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useBoardStore } from "../store/board";
 
+interface FileImportOptions {
+  onDrop?: (paths: string[], position?: { x: number; y: number }) => void;
+}
+
 /** Wires OS file-drop and clipboard-image paste into the open Board. */
-export function useFileImport() {
+export function useFileImport(options: FileImportOptions = {}) {
+  const onDropRef = useRef(options.onDrop);
+
+  useEffect(() => {
+    onDropRef.current = options.onDrop;
+  }, [options.onDrop]);
+
   // Native drag-and-drop of files onto the window.
   useEffect(() => {
     let cancelled = false;
@@ -12,7 +22,15 @@ export function useFileImport() {
       .onDragDropEvent((event) => {
         if (event.payload.type === "drop") {
           const paths = event.payload.paths ?? [];
-          if (paths.length) void useBoardStore.getState().importFiles(paths);
+          if (paths.length) {
+            const dpr = window.devicePixelRatio || 1;
+            const position = event.payload.position
+              ? { x: event.payload.position.x / dpr, y: event.payload.position.y / dpr }
+              : undefined;
+            const onDrop = onDropRef.current;
+            if (onDrop) onDrop(paths, position);
+            else void useBoardStore.getState().importFiles(paths);
+          }
         }
       })
       .then((u) => {

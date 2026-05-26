@@ -29,7 +29,6 @@ import { useHistoryStore } from "./store/history";
 import { useSettingsStore } from "./store/settings";
 import { useT } from "./i18n/locale";
 import type { MsgKey } from "./i18n/messages";
-import { useFileImport } from "./lib/useFileImport";
 import { useCodexEvents } from "./lib/useCodexEvents";
 import { ipc } from "./lib/ipc";
 import { buildOverlays } from "./lib/overlay";
@@ -241,7 +240,6 @@ export default function App() {
   // Bumped when settings are saved → restart the active session so a new proxy
   // (injected at sidecar spawn) takes effect.
   const restartNonce = useSettingsStore((s) => s.restartNonce);
-  useFileImport();
   useCodexEvents();
 
   // Restore the last workspace (or create a default) on launch. Guarded so
@@ -302,6 +300,7 @@ export default function App() {
             ]);
           }
           const turn = useChatStore.getState().startTurn(testPrompt, refs);
+          if (!turn) return;
           try {
             const overlays = await buildOverlays(startedBoardId, refs);
             if (!isCurrentStart()) return;
