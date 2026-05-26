@@ -22,6 +22,11 @@ fn hash_hex(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
+pub fn hash_file_hex(path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    Ok(hash_hex(&bytes))
+}
+
 /// Read width/height from encoded bytes without a full decode.
 fn dims_from_bytes(bytes: &[u8]) -> (u32, u32) {
     image::ImageReader::new(Cursor::new(bytes))

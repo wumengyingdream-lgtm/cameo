@@ -484,6 +484,9 @@ pub struct ChatImageResolution {
     /// images, where `cameo://` won't reach. Generated once per resolve and
     /// cached in the JS chat store.
     thumb_data_url: Option<String>,
+    /// Existing canvas placement for the same image bytes, if this path
+    /// resolves to an Asset already present on the Board.
+    existing_placement_id: Option<String>,
     /// Human-readable reason when the resolution doesn't yield a usable image.
     error: Option<String>,
 }
@@ -534,6 +537,7 @@ pub fn resolve_chat_image(
             in_workspace: false,
             workspace_rel_path: None,
             thumb_data_url: None,
+            existing_placement_id: None,
             error: Some(
                 if !exists {
                     "file not found"
@@ -556,6 +560,14 @@ pub fn resolve_chat_image(
     } else {
         None
     };
+
+    let existing_placement_id = assets::hash_file_hex(&canonical).ok().and_then(|asset_id| {
+        let doc = entry.doc.lock();
+        doc.placements
+            .iter()
+            .find(|p| p.asset_id == asset_id)
+            .map(|p| p.id.clone())
+    });
 
     // Out-of-workspace images can't be loaded via `cameo://` (which is scoped
     // to one board folder); inline them as a base64 thumbnail instead. JS
@@ -583,6 +595,7 @@ pub fn resolve_chat_image(
         in_workspace,
         workspace_rel_path,
         thumb_data_url,
+        existing_placement_id,
         error: None,
     })
 }

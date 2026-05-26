@@ -136,6 +136,7 @@ export interface ChatImageResolution {
   inWorkspace: boolean;
   workspaceRelPath: string | null;
   thumbDataUrl: string | null;
+  existingPlacementId: string | null;
   error: string | null;
 }
 

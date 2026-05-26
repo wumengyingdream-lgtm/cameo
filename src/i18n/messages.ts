@@ -61,8 +61,10 @@ export const en = {
 
   // Chat inline image (path detected in AI's text) right-click menu
   "chatImg.copy": "Copy image",
+  "chatImg.copyPath": "Copy path",
   "chatImg.useAsRef": "Use as reference",
   "chatImg.addToCanvas": "Add to canvas",
+  "chatImg.showOnCanvas": "Show on canvas",
   "chatImg.reveal": "Show in Finder",
   "chatImg.missing": "Image not found",
   "chat.showOnCanvas": "Show on canvas",
@@ -238,8 +240,10 @@ export const zh: Record<MsgKey, string> = {
   "chat.imageGenerating": "正在生成图片…",
 
   "chatImg.copy": "复制图片",
+  "chatImg.copyPath": "复制路径",
   "chatImg.useAsRef": "引用",
   "chatImg.addToCanvas": "添加到画布",
+  "chatImg.showOnCanvas": "在画布查看",
   "chatImg.reveal": "打开所在文件夹",
   "chatImg.missing": "图片未找到",
   "chat.showOnCanvas": "在画布查看",
