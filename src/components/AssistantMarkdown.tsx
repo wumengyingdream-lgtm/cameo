@@ -147,6 +147,12 @@ function transformPlainImageRefs(node: MarkdownNode) {
 
   const next: MarkdownNode[] = [];
   for (const child of node.children) {
+    if (child.type === "inlineCode" && typeof child.value === "string") {
+      const path = exactPlainImagePath(child.value);
+      next.push(path ? { type: "image", url: path, alt: "", title: null } : child);
+      continue;
+    }
+
     if (child.type === "text" && typeof child.value === "string") {
       next.push(...splitPlainImageText(child.value));
       continue;
@@ -174,4 +180,15 @@ function splitPlainImageText(value: string): MarkdownNode[] {
   }
   if (cursor < value.length) nodes.push({ type: "text", value: value.slice(cursor) });
   return nodes;
+}
+
+function exactPlainImagePath(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const refs = extractImageRefs(trimmed).filter((r) => r.kind === "plain");
+  if (refs.length !== 1) return null;
+
+  const [ref] = refs;
+  return ref.start === 0 && ref.end === trimmed.length ? ref.path : null;
 }
