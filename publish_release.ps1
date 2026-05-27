@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-# publish_release.ps1 — sign + upload the Windows auto-update release to R2.
+# publish_release.ps1 — sign + upload the Windows release to R2, then mirror installer to GitHub.
 #
 # Windows half of the release. macOS publishes independently from a Mac via
 # publish_release.sh — the two write DIFFERENT manifest files on R2
@@ -19,7 +19,9 @@
 #      JSON ({version, notes, pub_date, signature, url}).
 #   3. rclone uploads to R2:
 #      - .nsis.zip + .sig + -setup.exe -> release/v<version>/
-#      - manifest -> update/windows-x86_64.json
+#      - updater manifest -> update/windows-x86_64.json
+#      - website manifest -> update/latest_win.json
+#   4. Mirrors only the installer to GitHub Releases.
 #
 # R2 credentials come from .env (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY /
 # R2_ENDPOINT / R2_BUCKET). The same .env that hosts TAURI_SIGNING_PRIVATE_KEY
@@ -162,9 +164,54 @@ function Write-Manifest($name, $payloadFilename, $sigFile) {
   Queue $out "update/$name.json"
 }
 
-# GitHub release assets. R2 (above) carries the Tauri auto-UPDATER; the
-# open-source DOWNLOAD channel is GitHub Releases (-setup.exe + latest_win.json),
-# which cameo_web serves via cameo.ink/update/ (releases/latest/download).
+function Invoke-CfCachePurge($uploads) {
+  if (-not $env:CF_ZONE_ID -or -not $env:CF_API_TOKEN) {
+    Warn "CF_ZONE_ID / CF_API_TOKEN not set - skipping Cloudflare cache purge"
+    return
+  }
+
+  $urls = @()
+  foreach ($u in $uploads) { $urls += "https://r.cameo.ink/$($u.Dst)" }
+  $body = @{ files = $urls } | ConvertTo-Json -Depth 3
+
+  try {
+    Info "purging Cloudflare cache for $($urls.Count) R2 URL(s)"
+    $res = Invoke-RestMethod `
+      -Uri "https://api.cloudflare.com/client/v4/zones/$($env:CF_ZONE_ID)/purge_cache" `
+      -Method Post `
+      -Headers @{ Authorization = "Bearer $($env:CF_API_TOKEN)" } `
+      -ContentType 'application/json' `
+      -Body $body
+    if ($res.success) { Ok "Cloudflare cache purged" }
+    else { Warn "Cloudflare cache purge may have failed" }
+  } catch {
+    Warn "Cloudflare cache purge request failed: $($_.Exception.Message)"
+  }
+}
+
+function Test-R2Urls($uploads) {
+  Info "verifying uploaded R2 URLs"
+  $failed = 0
+  foreach ($u in $uploads) {
+    $url = "https://r.cameo.ink/$($u.Dst)"
+    try {
+      $res = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 30
+      if ($res.StatusCode -in 200, 204, 206) {
+        Ok "  $($u.Dst)"
+      } else {
+        Warn "  $($u.Dst) returned HTTP $($res.StatusCode)"
+        $failed++
+      }
+    } catch {
+      Warn "  $($u.Dst) verification failed: $($_.Exception.Message)"
+      $failed++
+    }
+  }
+  if ($failed -gt 0) { Warn "some R2 URLs did not verify; CDN propagation may still be in flight" }
+}
+
+# GitHub release assets are a human-facing mirror only. R2 is the canonical
+# download source for both the website (latest_win.json) and the Tauri updater.
 $ghRepo  = "hAcKlyc/cameo"
 $ghFiles = @()
 
@@ -191,24 +238,22 @@ Queue $exe.FullName "release/v$Version/$($exe.Name)"
 $ghFiles += $exe.FullName  # also publish the installer to the GitHub release
 Ok "  installer: $($exe.Name)"
 
-# Website download manifest (latest_win.json) -> GitHub release. cameo_web's
-# download button fetches cameo.ink/update/latest_win.json (proxying
-# releases/latest/download/latest_win.json); url -> the GitHub asset.
+# Website download manifest (latest_win.json) -> R2. cameo_web's download button
+# fetches this from R2; url -> the R2 installer object.
 $latestWin = Join-Path $manifestDir 'latest_win.json'
-$ghDlBase  = "https://github.com/$ghRepo/releases/download/v$Version"
 $latestJson = @"
 {
   "version": "$Version",
   "pub_date": "$PubDate",
   "release_notes": "$Notes",
   "downloads": {
-    "win_x64": { "name": "Windows x64", "url": "$ghDlBase/$($exe.Name)" }
+    "win_x64": { "name": "Windows x64", "url": "$DownloadBase/$($exe.Name)" }
   }
 }
 "@
 [System.IO.File]::WriteAllText($latestWin, $latestJson, (New-Object System.Text.UTF8Encoding $false))
-$ghFiles += $latestWin
-Ok "manifest: latest_win.json (website download -> GitHub release)"
+Queue $latestWin "update/latest_win.json"
+Ok "manifest: latest_win.json (website download -> R2)"
 
 # -- upload ------------------------------------------------------------------
 if ($uploads.Count -eq 0) { Die "no artifacts to upload - did you run .\build_release.ps1 first?" }
@@ -253,6 +298,9 @@ try {
   }
 } finally { Remove-Item $emptyConf.FullName -ErrorAction SilentlyContinue }
 
+Invoke-CfCachePurge $uploads
+Test-R2Urls $uploads
+
 Write-Host ""
 Ok "Windows release v$Version published"
 Write-Host ""
@@ -263,8 +311,8 @@ foreach ($u in $uploads) {
 Write-Host "  +--------------------------------------------------------------"
 Write-Host ""
 
-# -- GitHub Release (open-source distribution + website download source) ------
-# Tag + create (idempotent) and upload the installer + latest_win.json. macOS
+# -- GitHub Release (open-source installer mirror) ----------------------------
+# Tag + create (idempotent) and upload the installer only. macOS
 # publishes to the SAME release from publish_release.sh (whichever runs first
 # creates it; the other uploads with --clobber).
 if ((Get-Command gh -ErrorAction SilentlyContinue) -and $ghFiles.Count -gt 0) {
@@ -277,11 +325,11 @@ if ((Get-Command gh -ErrorAction SilentlyContinue) -and $ghFiles.Count -gt 0) {
   if ($LASTEXITCODE -ne 0) { & gh release create $tag --title "Cameo $tag" --notes "$Notes" --verify-tag; Ok "created GitHub release $tag" }
   Info "uploading $($ghFiles.Count) GitHub release asset(s) - this may take a while"
   & gh release upload $tag @ghFiles --clobber
-  if ($LASTEXITCODE -eq 0) { Ok "uploaded $($ghFiles.Count) asset(s) -> download links live at cameo.ink" }
+  if ($LASTEXITCODE -eq 0) { Ok "uploaded $($ghFiles.Count) installer mirror asset(s) -> GitHub Release" }
   Write-Host ""
 } else {
-  Warn "gh CLI missing or no installer - skipped GitHub release; cameo_web download"
-  Warn "button stays on the releases page until a release with latest_win.json exists."
+  Warn "gh CLI missing or no installer - skipped GitHub release mirror."
+  Warn "R2 website downloads and auto-updater manifest were already published."
   Write-Host ""
 }
 

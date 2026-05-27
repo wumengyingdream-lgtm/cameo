@@ -393,7 +393,7 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 | `setup.{sh,ps1}` | 一次性：查工具链 + 加 `rustup target` + 装依赖 |
 | `build_dev.{sh,ps1}` | unsigned 调试包：mac 出 `Cameo.app`，win 出 `cameo.exe` |
 | `build_release.{sh,ps1}` | mac 默认出 **universal** `.dmg`（arm64 + Intel 一份），可 `--arm` / `--intel` / `--both`；win 出 NSIS 安装器 |
-| `publish_release.sh` | GitHub release 发布 + R2 上传 + 写 `latest.json`（updater 索引）|
+| `publish_release.{sh,ps1}` | R2 发布（updater payload/manifest + 官网 `latest*.json` + 安装包）并把安装包镜像到 GitHub Release |
 
 ### 9.3 签名
 
@@ -402,7 +402,11 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
   （本机能跑，他机被 Gatekeeper 拦）。
 - **Windows**：走 `tauri.conf.json` 的 `bundle.windows.certificateThumbprint`，缺省不签。
 - **Updater 签名**：`TAURI_SIGNING_PRIVATE_KEY` ed25519，pubkey 嵌在 `tauri.conf.json` 的
-  updater 段，下发的 `latest.json` 带签名，installer 端校验。
+  updater 段，下发的 `darwin-*` / `windows-*` updater manifest 带签名，installer 端校验。
+- **下载源分工**：R2 `https://r.cameo.ink` 是官网 `latest*.json`、官网安装包下载和 app updater 的
+  canonical source；GitHub Release 只保留一份安装包镜像给开源访问者手动下载。
+- **发布后验证**：`publish_release.*` 上传 R2 后会可选使用 `CF_ZONE_ID` / `CF_API_TOKEN` 清 CDN
+  缓存，并对刚上传的 `r.cameo.ink` URL 做 HEAD 验证。
 
 ### 9.4 跨端不能交叉
 
