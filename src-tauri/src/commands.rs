@@ -12,6 +12,7 @@ use crate::workspace::{self, WorkspaceEntry};
 use crate::{assets, storage};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
@@ -124,7 +125,7 @@ pub fn open_board(path: String, registry: State<Arc<BoardRegistry>>) -> Result<B
     storage::save_board_doc(&folder, &doc).map_err(e2s)?;
 
     // Stable id + display name, persisted in meta.json (generated once). Renames
-    // and folder moves never change the id (cameo:// / board.json stay valid).
+    // and folder moves never change the id (image URLs / board.json stay valid).
     let mut meta = storage::load_meta(&folder);
     let id = meta
         .board_id
@@ -481,8 +482,8 @@ pub struct ChatImageResolution {
     /// this with `cameoUrl(boardId, relPath)` to load the full image.
     workspace_rel_path: Option<String>,
     /// Base64-encoded JPEG thumbnail (max side 240 px) for OUT-OF-workspace
-    /// images, where `cameo://` won't reach. Generated once per resolve and
-    /// cached in the JS chat store.
+    /// images, where the Cameo image protocol won't reach. Generated once per
+    /// resolve and cached in the JS chat store.
     thumb_data_url: Option<String>,
     /// Existing canvas placement for the same image bytes, if this path
     /// resolves to an Asset already present on the Board.
@@ -569,9 +570,10 @@ pub fn resolve_chat_image(
             .map(|p| p.id.clone())
     });
 
-    // Out-of-workspace images can't be loaded via `cameo://` (which is scoped
-    // to one board folder); inline them as a base64 thumbnail instead. JS
-    // caches the result so the cost is paid once per unique path per session.
+    // Out-of-workspace images can't be loaded through the Cameo image protocol
+    // (which is scoped to one board folder); inline them as a base64 thumbnail
+    // instead. JS caches the result so the cost is paid once per unique path
+    // per session.
     let thumb_data_url = if !in_workspace {
         match build_thumb_data_url(&canonical) {
             Ok(url) => Some(url),
@@ -676,7 +678,10 @@ fn build_thumb_data_url(path: &Path) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_url_to_path, normalize_chat_path_raw, path_to_url_rel};
+    use super::{
+        file_url_to_path, normalize_chat_path_raw, path_to_url_rel, unique_export_dest,
+    };
+    use std::collections::HashSet;
     use std::path::Path;
 
     #[test]
@@ -697,6 +702,20 @@ mod tests {
     fn workspace_relative_paths_are_url_slash_separated() {
         let rel = Path::new("imports").join("cute-tiger.png");
         assert_eq!(path_to_url_rel(&rel), "imports/cute-tiger.png");
+    }
+
+    #[test]
+    fn export_dest_dedupes_existing_and_reserved_names() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("image.png"), b"existing").unwrap();
+        let src = Path::new("/tmp/image.png");
+        let mut reserved = HashSet::new();
+
+        let first = unique_export_dest(dir.path(), src, &mut reserved);
+        let second = unique_export_dest(dir.path(), src, &mut reserved);
+
+        assert_eq!(first.file_name().unwrap(), "image 2.png");
+        assert_eq!(second.file_name().unwrap(), "image 3.png");
     }
 }
 
@@ -840,6 +859,64 @@ pub fn export_asset(
     let src = asset_abs_path(&entry, &placement_id)?;
     std::fs::copy(&src, &dest).map_err(e2s)?;
     Ok(())
+}
+
+/// Export several selected Placement backing files into one destination folder.
+/// Filenames preserve the Asset's basename; collisions get a stable numeric
+/// suffix (`image.png`, `image 2.png`, ...).
+#[tauri::command]
+pub fn export_assets(
+    board_id: String,
+    placement_ids: Vec<String>,
+    dest_dir: String,
+    registry: State<Arc<BoardRegistry>>,
+) -> Result<Vec<String>, String> {
+    let entry = registry.get(&board_id).ok_or("unknown board")?;
+    let dest_dir = PathBuf::from(dest_dir);
+    if !dest_dir.is_dir() {
+        return Err("export destination is not a folder".into());
+    }
+
+    let mut sources = Vec::new();
+    for placement_id in placement_ids {
+        sources.push(asset_abs_path(&entry, &placement_id)?);
+    }
+
+    let mut reserved = HashSet::new();
+    let mut exported = Vec::new();
+    for src in sources {
+        let dest = unique_export_dest(&dest_dir, &src, &mut reserved);
+        std::fs::copy(&src, &dest).map_err(e2s)?;
+        exported.push(dest.to_string_lossy().to_string());
+    }
+    Ok(exported)
+}
+
+fn unique_export_dest(dest_dir: &Path, src: &Path, reserved: &mut HashSet<PathBuf>) -> PathBuf {
+    let original = src
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("image.png");
+    let stem = Path::new(original)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("image");
+    let ext = Path::new(original).extension().and_then(|s| s.to_str());
+
+    for idx in 1.. {
+        let candidate_name = match (idx, ext) {
+            (1, Some(ext)) => format!("{stem}.{ext}"),
+            (1, None) => stem.to_string(),
+            (_, Some(ext)) => format!("{stem} {idx}.{ext}"),
+            (_, None) => format!("{stem} {idx}"),
+        };
+        let candidate = dest_dir.join(candidate_name);
+        if !candidate.exists() && reserved.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded export filename search")
 }
 
 // ── Codex runtime commands (Phase 3) ─────────────────────────────────────────

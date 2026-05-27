@@ -5,7 +5,7 @@ import { useBoardStore } from "../store/board";
 import { useChatStore } from "../store/chat";
 import { useUiStore } from "../store/ui";
 import { ipc } from "../lib/ipc";
-import { PRESET_REMOVE_BG, PRESET_UPSCALE, runImagePreset, exportImage } from "../lib/imageActions";
+import { PRESET_REMOVE_BG, PRESET_UPSCALE, runImagePreset, exportImages } from "../lib/imageActions";
 import { useT } from "../i18n/locale";
 
 /** Native-style right-click menu on the canvas. On an image it flattens the
@@ -40,7 +40,8 @@ export function CanvasContextMenu({
 
   if (!menu) return null;
 
-  const boardId = useBoardStore.getState().boardId;
+  const board = useBoardStore.getState();
+  const boardId = board.boardId;
   const chat = useChatStore.getState();
   const ready = chat.sessionStatus === "ready" && chat.turnStatus !== "running";
 
@@ -51,7 +52,11 @@ export function CanvasContextMenu({
   };
 
   // Clamp to the viewport (rough height estimate per menu kind).
-  const estH = menu.kind === "image" ? 320 : 96;
+  const selectedIds = [...board.selection];
+  const multiSelectImage =
+    menu.kind === "image" && selectedIds.length > 1 && board.selection.has(menu.placementId);
+  const exportIds = menu.kind === "image" && multiSelectImage ? selectedIds : menu.kind === "image" ? [menu.placementId] : [];
+  const estH = menu.kind === "image" ? (multiSelectImage ? 192 : 320) : 96;
   const left = Math.max(8, Math.min(menu.x, window.innerWidth - 208));
   const top = Math.max(8, Math.min(menu.y, window.innerHeight - estH - 8));
   const style = { left, top } as const;
@@ -60,19 +65,23 @@ export function CanvasContextMenu({
     const pid = menu.placementId;
     return (
       <div className="cm-ctx" style={style} onPointerDown={(e) => e.stopPropagation()}>
-        <button className="cm-ctx__item" disabled={!ready} onClick={act(() => boardId && runImagePreset(boardId, pid, PRESET_REMOVE_BG))}>
-          <Eraser size={14} />
-          {t("img.removeBg")}
-        </button>
-        <button className="cm-ctx__item" disabled={!ready} onClick={act(() => boardId && runImagePreset(boardId, pid, PRESET_UPSCALE))}>
-          <Sparkles size={14} />
-          {t("img.upscale")}
-        </button>
-        <button className="cm-ctx__item" onClick={act(() => useUiStore.getState().setCropping(pid))}>
-          <Crop size={14} />
-          {t("img.crop")}
-        </button>
-        <div className="cm-ctx__sep" />
+        {!multiSelectImage && (
+          <>
+            <button className="cm-ctx__item" disabled={!ready} onClick={act(() => boardId && runImagePreset(boardId, pid, PRESET_REMOVE_BG))}>
+              <Eraser size={14} />
+              {t("img.removeBg")}
+            </button>
+            <button className="cm-ctx__item" disabled={!ready} onClick={act(() => boardId && runImagePreset(boardId, pid, PRESET_UPSCALE))}>
+              <Sparkles size={14} />
+              {t("img.upscale")}
+            </button>
+            <button className="cm-ctx__item" onClick={act(() => useUiStore.getState().setCropping(pid))}>
+              <Crop size={14} />
+              {t("img.crop")}
+            </button>
+            <div className="cm-ctx__sep" />
+          </>
+        )}
         <button className="cm-ctx__item" onClick={act(() => boardId && void ipc.copyImage(boardId, pid))}>
           <Copy size={14} />
           {t("img.copy")}
@@ -81,9 +90,9 @@ export function CanvasContextMenu({
           <FolderOpen size={14} />
           {t("img.reveal")}
         </button>
-        <button className="cm-ctx__item" onClick={act(() => boardId && void exportImage(boardId, pid))}>
+        <button className="cm-ctx__item" onClick={act(() => boardId && void exportImages(boardId, exportIds))}>
           <Download size={14} />
-          {t("img.export")}
+          {multiSelectImage ? t("img.exportSelected", { count: exportIds.length }) : t("img.export")}
         </button>
         <div className="cm-ctx__sep" />
         <button className="cm-ctx__item cm-ctx__item--danger" onClick={act(() => void useBoardStore.getState().deleteSelected())}>

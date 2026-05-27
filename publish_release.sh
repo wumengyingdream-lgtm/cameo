@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# publish_release.sh — sign + upload the macOS auto-update release to R2.
+# publish_release.sh — sign + upload the macOS release to R2, then mirror installers to GitHub.
 #
 # macOS half of the release. Windows publishes independently from a Windows box
 # via publish_release.ps1 — the two write DIFFERENT manifest files on R2
@@ -20,7 +20,9 @@
 #      - Writes a manifest JSON ({version, notes, pub_date, signature, url})
 #   3. rclone uploads to R2:
 #      - .app.tar.gz + .sig + .dmg → release/v<version>/
-#      - manifests → update/{darwin-aarch64,darwin-x86_64}.json
+#      - updater manifests → update/{darwin-aarch64,darwin-x86_64}.json
+#      - website manifest → update/latest.json
+#   4. Mirrors only the .dmg installers to GitHub Releases.
 #
 # R2 credentials come from .env (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY /
 # R2_ENDPOINT / R2_BUCKET). The same .env that hosts TAURI_SIGNING_PRIVATE_KEY
@@ -75,6 +77,7 @@ else
 fi
 
 command -v rclone >/dev/null || die "rclone not on PATH — brew install rclone"
+command -v curl >/dev/null || die "curl not on PATH"
 
 # ── version ─────────────────────────────────────────────────────────────────
 pkg_ver=$(node -p "require('./package.json').version" 2>/dev/null || echo "?")
@@ -142,12 +145,58 @@ EOF
   queue "$out" "update/${manifest_name}.json"
 }
 
-# GitHub release assets. R2 (above) carries the Tauri auto-UPDATER (.app.tar.gz +
-# darwin-*.json). The open-source DOWNLOAD channel is GitHub Releases: the .dmg
-# installers + a website manifest (latest.json) are tagged + uploaded there, and
-# cameo_web serves them via cameo.ink/update/ (proxying releases/latest/download).
+purge_cf_cache() {
+  if [[ -z "${CF_ZONE_ID:-}" || -z "${CF_API_TOKEN:-}" ]]; then
+    warn "CF_ZONE_ID / CF_API_TOKEN not set — skipping Cloudflare cache purge"
+    return 0
+  fi
+
+  local json='{"files":['
+  local sep=""
+  for entry in "${UPLOADS[@]}"; do
+    IFS="|" read -r _ DST <<< "$entry"
+    json+="${sep}\"https://r.cameo.ink/${DST}\""
+    sep=","
+  done
+  json+=']}'
+
+  info "purging Cloudflare cache for ${#UPLOADS[@]} R2 URL(s)"
+  local res
+  if ! res=$(curl -fsS -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+    -H "Authorization: Bearer ${CF_API_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data "$json"); then
+    warn "Cloudflare cache purge request failed"
+    return 0
+  fi
+  if [[ "$res" == *'"success":true'* ]]; then
+    ok "Cloudflare cache purged"
+  else
+    warn "Cloudflare cache purge may have failed: ${res:0:200}"
+  fi
+}
+
+verify_r2_urls() {
+  info "verifying uploaded R2 URLs"
+  local failed=0
+  for entry in "${UPLOADS[@]}"; do
+    IFS="|" read -r _ DST <<< "$entry"
+    local url="https://r.cameo.ink/${DST}"
+    local code
+    code=$(curl -sS -o /dev/null -w "%{http_code}" -I "$url" 2>/dev/null || echo "000")
+    if [[ "$code" == "200" || "$code" == "204" || "$code" == "206" ]]; then
+      ok "  ${DST}"
+    else
+      warn "  ${DST} returned HTTP ${code}"
+      failed=1
+    fi
+  done
+  [[ "$failed" -eq 0 ]] || warn "some R2 URLs did not verify; CDN propagation may still be in flight"
+}
+
+# GitHub release assets are a human-facing mirror only. R2 is the canonical
+# download source for both the website (latest.json) and the Tauri updater.
 GH_REPO="hAcKlyc/cameo"
-GH_DL_BASE="https://github.com/${GH_REPO}/releases/download/v${VERSION}"
 declare -a GH_FILES=()
 DMG_ARM64=""; DMG_X64=""
 
@@ -198,20 +247,20 @@ for arch_pair in "aarch64-apple-darwin:aarch64:darwin-aarch64" "x86_64-apple-dar
 done
 
 # ── website download manifest (latest.json) ──────────────────────────────────
-# cameo_web's download buttons fetch this (cameo.ink/update/latest.json proxies
-# releases/latest/download/latest.json). URLs point at the GitHub release assets.
+# cameo_web's download buttons fetch this from R2. URLs point at the R2 installer
+# objects, not GitHub Releases.
 if [[ -n "$DMG_ARM64" || -n "$DMG_X64" ]]; then
   LATEST_JSON="${MANIFEST_DIR}/latest.json"
   {
     printf '{\n  "version": "%s",\n  "pub_date": "%s",\n  "release_notes": "%s",\n  "downloads": {\n' \
       "$VERSION" "$PUB_DATE" "$NOTES"
     sep=""
-    [[ -n "$DMG_ARM64" ]] && { printf '%s    "mac_arm64": { "name": "Apple Silicon", "url": "%s/%s" }' "$sep" "$GH_DL_BASE" "$DMG_ARM64"; sep=$',\n'; }
-    [[ -n "$DMG_X64" ]]   && printf '%s    "mac_intel": { "name": "Intel Mac", "url": "%s/%s" }' "$sep" "$GH_DL_BASE" "$DMG_X64"
+    [[ -n "$DMG_ARM64" ]] && { printf '%s    "mac_arm64": { "name": "Apple Silicon", "url": "%s/%s" }' "$sep" "$DOWNLOAD_BASE" "$DMG_ARM64"; sep=$',\n'; }
+    [[ -n "$DMG_X64" ]]   && printf '%s    "mac_intel": { "name": "Intel Mac", "url": "%s/%s" }' "$sep" "$DOWNLOAD_BASE" "$DMG_X64"
     printf '\n  }\n}\n'
   } > "$LATEST_JSON"
-  GH_FILES+=("$LATEST_JSON")
-  ok "manifest: latest.json (website downloads → GitHub release)"
+  queue "$LATEST_JSON" "update/latest.json"
+  ok "manifest: latest.json (website downloads → R2)"
 fi
 
 # ── upload ──────────────────────────────────────────────────────────────────
@@ -259,6 +308,9 @@ for entry in "${UPLOADS[@]}"; do
   rclone --config /dev/null --progress --stats=1s copyto "$SRC" ":s3:${R2_BUCKET}/${DST}"
 done
 
+purge_cf_cache
+verify_r2_urls
+
 echo ""
 ok "macOS release v${VERSION} published"
 echo ""
@@ -272,9 +324,8 @@ done
 echo "  └───────────────────────────────────────────────────────────"
 echo ""
 
-# ── GitHub Release (open-source distribution + website download source) ──────
-# Tag + create the release (idempotent) and upload the installers + latest.json.
-# cameo_web reads releases/latest/download/latest.json for its download buttons.
+# ── GitHub Release (open-source installer mirror) ────────────────────────────
+# Tag + create the release (idempotent) and upload the installers only.
 # Windows publishes to the SAME release from publish_release.ps1 (whichever runs
 # first creates it; the other uploads with --clobber).
 if command -v gh >/dev/null 2>&1 && [[ ${#GH_FILES[@]} -gt 0 ]]; then
@@ -290,11 +341,11 @@ if command -v gh >/dev/null 2>&1 && [[ ${#GH_FILES[@]} -gt 0 ]]; then
   fi
   info "uploading ${#GH_FILES[@]} GitHub release asset(s) — this may take a while"
   gh release upload "$TAG" "${GH_FILES[@]}" --clobber \
-    && ok "uploaded ${#GH_FILES[@]} asset(s) → download links live at cameo.ink"
+    && ok "uploaded ${#GH_FILES[@]} installer mirror asset(s) → GitHub Release"
   echo ""
 else
-  warn "gh CLI missing or no installers — skipped GitHub release; cameo_web download"
-  warn "buttons stay on the GitHub releases page until a release with latest.json exists."
+  warn "gh CLI missing or no installers — skipped GitHub release mirror."
+  warn "R2 website downloads and auto-updater manifests were already published."
   echo ""
 fi
 

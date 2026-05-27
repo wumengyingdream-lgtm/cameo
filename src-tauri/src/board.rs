@@ -29,7 +29,7 @@ pub struct BoardRegistry {
     inner: Mutex<HashMap<String, Arc<BoardEntry>>>,
 }
 
-/// Stable id from the folder path → `cameo://` URLs + texture caches survive reopen.
+/// Stable id from the folder path -> image URLs + texture caches survive reopen.
 pub fn board_id_for(folder: &Path) -> String {
     let s = folder.to_string_lossy();
     blake3::hash(s.as_bytes()).to_hex()[..12].to_string()

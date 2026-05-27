@@ -138,7 +138,7 @@ impl Default for BoardDoc {
 
 /// `<folder>/.cameo/meta.json` — per-Board identity + runtime + active session.
 /// `board_id` is a STABLE persisted id (generated once): renaming the folder or
-/// the workspace name never changes it, so cameo:// URLs / board.json / sessions
+/// the workspace name never changes it, so image URLs / board.json / sessions
 /// stay valid. `thread_id` is the legacy single-session token (migrated into
 /// sessions.json in v0.0.2; kept for back-compat reads).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -3,6 +3,19 @@
 User-facing release notes for Cameo. This file describes what changed from a
 user's point of view, rather than listing internal implementation details.
 
+## [0.1.2] - 2026-05-28
+
+### Improvements
+
+- You can now export several selected images at once into a folder, with Cameo
+  preserving the original filenames and avoiding collisions automatically.
+- Image loading is more reliable across macOS and Windows, especially for board
+  images served through Cameo's local image protocol.
+- App updates and website download links now use Cameo's dedicated release CDN,
+  while GitHub Releases remain available as a manual installer mirror.
+
+---
+
 ## [0.1.1] - 2026-05-27
 
 ### Improvements

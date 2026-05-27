@@ -1,7 +1,7 @@
 {
   "name": "cameo",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "An image-first canvas for your local Codex agent.",
   "license": "AGPL-3.0-or-later",
   "author": "Ethan L <myagents.io@gmail.com>",
@@ -17,6 +17,7 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint ."
   },
@@ -44,6 +45,7 @@
     "eslint-plugin-react-refresh": "^0.4.16",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.20.0",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.7"
   }
 }
