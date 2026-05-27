@@ -1,4 +1,8 @@
-//! `cameo://localhost/<boardId>/<rel-path>` — serves image bytes from a Board folder.
+//! Cameo image protocol handler. Serves image bytes from a Board folder.
+//!
+//! URL shape is platform-dependent: WebKit-style webviews request
+//! `cameo://localhost/<boardId>/<rel-path>`, while WebView2 requests
+//! `http://cameo.localhost/<boardId>/<rel-path>`.
 //!
 //! Path canonicalization + traversal guard ported from Riff's `riff://` scheme:
 //! reject `..`/absolute components, then verify the canonical path stays inside

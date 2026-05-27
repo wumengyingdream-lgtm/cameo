@@ -114,6 +114,7 @@ export const en = {
   "img.copy": "Copy",
   "img.reveal": "Reveal in Finder",
   "img.export": "Export…",
+  "img.exportSelected": "Export {count} images…",
   "img.delete": "Delete",
 
   // Canvas context menu (empty space)
@@ -289,6 +290,7 @@ export const zh: Record<MsgKey, string> = {
   "img.copy": "复制",
   "img.reveal": "在 Finder 显示",
   "img.export": "导出…",
+  "img.exportSelected": "导出 {count} 张…",
   "img.delete": "删除",
 
   "ctx.paste": "粘贴",

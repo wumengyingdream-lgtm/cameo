@@ -15,7 +15,7 @@ function shapeAnchor(s: Shape): [number, number] {
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = "anonymous"; // cameo:// sends ACAO * → untainted canvas
+    img.crossOrigin = "anonymous"; // Cameo image protocol sends ACAO * -> untainted canvas
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`load ${url}`));
     img.src = url;

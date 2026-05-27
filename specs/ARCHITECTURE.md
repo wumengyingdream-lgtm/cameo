@@ -60,7 +60,7 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
 | 桌面壳 | **Tauri 2** | 轻、Rust 后端、原生菜单/托盘/更新器都有，跨 mac/win 一份代码 |
 | UI chrome | **React 19** + Zustand v5 | 团队熟、生态全；状态库选 Zustand 是因为不想要 Redux 模板 |
 | 画布渲染 | **PixiJS v8**（WebGL2 基线，WebGPU 自动启用）| 不选 Vello（alpha + 大图弱）、egui（大图卡）、GPUI（单公司）|
-| 图片协议 | 自定义 `cameo://localhost/<boardId>/…` URI | boardId 放 path（兼容 Windows WebView2 的 `http://cameo.localhost/…` 形态）+ 路径规范化 + 防穿越 |
+| 图片协议 | 自定义 Cameo 图片协议 | 前端只通过 `src/lib/cameo-url.ts` 生成 URL；macOS/Linux/iOS 为 `cameo://localhost/<boardId>/…`，Windows/Android 为 Tauri/WebView 需要的 `http://cameo.localhost/<boardId>/…`；boardId 放 path + 路径规范化 + 防穿越 |
 | Agent | **Codex `app-server`**（JSON-RPC over stdio）| 长驻进程 = stateful session，跟"每轮 respawn"完全不同 |
 | 鉴权 | `~/.codex` ChatGPT 订阅 | **无 API key**；Cameo 不接 OpenAI，能力来自用户已付费的 Codex |
 | 国际化 | 自研 `i18n/messages.ts`（key catalog）| 简单到不需要 i18next；en 是 source of truth |
@@ -93,7 +93,7 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
 │  │  • Board registry    │    │  • Stores (Zustand)              │  │
 │  │  • Codex sidecar     │    │  • Canvas scene (PixiJS)         │  │
 │  │    driver            │    │  • Chat / Composer / Gallery     │  │
-│  │  • cameo:// protocol │    │                                  │  │
+│  │  • Cameo image proto │    │                                  │  │
 │  │  • Logging / Config  │    │                                  │  │
 │  │  • Updater / Tray    │    │                                  │  │
 │  └──────────┬───────────┘    └──────────────────────────────────┘  │
@@ -113,7 +113,7 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
    └───────────────────────────────┘
 ```
 
-- **唯一对外网络** = Codex sidecar。WebView 只读本地 `cameo://`，Rust 后端只读写本地文件（+
+- **唯一对外网络** = Codex sidecar。WebView 只读本地 Cameo 图片协议，Rust 后端只读写本地文件（+
   可选 cloud telemetry / gallery，见 §7）。
 - **进程清理纪律**：unix 走 `nix` 进程组 SIGTERM→SIGKILL，win 走 `taskkill /T /F`（`codex.rs`
   里 `kill_tree` 两个 `#[cfg]` 版本）—— 关 app / 换 Board / interrupt turn 都不能留僵尸。
@@ -128,7 +128,7 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
 | 文件 | 行数 | 职责 |
 |---|---:|---|
 | `main.rs` | 5 | 二进制入口，调 `cameo_lib::run()` |
-| `lib.rs` | 167 | **Tauri Builder**：plugin（opener/dialog/notification/updater/process）+ 全局 state（BoardRegistry / CodexRegistry）+ 41 个 command 注册 + `cameo://` 协议 + 窗口关闭→托盘逻辑 |
+| `lib.rs` | 167 | **Tauri Builder**：plugin（opener/dialog/notification/updater/process）+ 全局 state（BoardRegistry / CodexRegistry）+ 41 个 command 注册 + Cameo 图片协议 + 窗口关闭→托盘逻辑 |
 | `commands.rs` | 949 | **IPC 桥**：workspace / board / asset / session / codex / config / device / updater / clipboard 的所有命令实现。前端的每个 `ipc.xxx` 在这里有 1:1 对应 |
 
 **Board 和文档真相**
@@ -152,14 +152,14 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
 | 文件 | 行数 | 职责 |
 |---|---:|---|
 | `assets.rs` | 184 | Asset 内容寻址（blake3）+ 缩略图生成（image crate → JPEG）|
-| `protocol.rs` | 82 | `cameo://` URI 处理：从 BoardRegistry 路由到磁盘文件，兼容 Windows WebView2 host 变形，做路径规范化 / 防穿越 |
+| `protocol.rs` | 82 | Cameo 图片协议 URI 处理：从 BoardRegistry 路由到磁盘文件，兼容 Windows WebView2 `http://cameo.localhost/...` 形态，做路径规范化 / 防穿越 |
 | `paths.rs` | 100 | 文件系统布局：全局 `~/.cameo/` + 每 Board `.cameo/`，`CAMEO_HOME` 可覆盖（测试/便携）|
 
 **系统服务**
 | 文件 | 行数 | 职责 |
 |---|---:|---|
 | `config.rs` | 61 | `AppConfig`（proxy / close_to_tray / telemetry_opt_out / last_telemetry_date）+ `~/.cameo/config.json` 原子 IO |
-| `proxy.rs` | 166 | HTTP/SOCKS5 代理注入 —— 给 Codex sidecar spawn 时的 env 设 `HTTP(S)_PROXY` / `ALL_PROXY` / `NO_PROXY`。Cameo 唯一会走代理的就是 Codex（WebView 只读 `cameo://`）|
+| `proxy.rs` | 166 | HTTP/SOCKS5 代理注入 —— 给 Codex sidecar spawn 时的 env 设 `HTTP(S)_PROXY` / `ALL_PROXY` / `NO_PROXY`。Cameo 唯一会走代理的就是 Codex（WebView 只读本地 Cameo 图片协议）|
 | `logging.rs` | 56 | `tracing` 双 sink：stderr + 日滚文件（`~/.cameo/logs/cameo.YYYY-MM-DD.log`，保留 14 天）。Rust / 前端 `front_log` / Codex stderr 全部带 `module=` 标签汇在一处 |
 | `device.rs` | 94 | 匿名 device id（UUID v4 持久化到 `~/.cameo/device_id`），cloud telemetry 的锚 |
 | `tray.rs` | 68 | 系统托盘图标 + 菜单。关窗口默认隐藏到托盘（设置可关）；macOS dock reopen 处理 |
@@ -302,7 +302,8 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 
 | 文件 | 职责 |
 |---|---|
-| `ipc.ts` | Tauri `invoke` 的薄包装，1:1 映射到 `commands.rs`；提供 `cameoUrl(boardId, relPath)` |
+| `ipc.ts` | Tauri `invoke` 的薄包装，1:1 映射到 `commands.rs` |
+| `cameo-url.ts` | Cameo 图片 URL 单一出口；通过 Tauri `convertFileSrc` 推导平台协议 base，再按 `<boardId>/<rel-path>` 逐段编码 |
 | `useCodexEvents.ts` | listen `codex-event` channel，按 `event.kind` 路由到 board / chat / 通知 |
 | `useFileImport.ts` | drag-drop + 文件 picker，导入到当前 Board |
 | `overlay.ts` | 把 canvas + 标注合成成 PNG（clean + overlay 两张）|

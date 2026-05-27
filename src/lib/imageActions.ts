@@ -1,4 +1,4 @@
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useBoardStore } from "../store/board";
 import { useChatStore } from "../store/chat";
 import { ipc } from "./ipc";
@@ -41,4 +41,18 @@ export function runImagePreset(boardId: string, pid: string, presetPrompt: strin
 export async function exportImage(boardId: string, pid: string): Promise<void> {
   const dest = await save({ defaultPath: imageName(pid), title: "Export image" });
   if (typeof dest === "string") await ipc.exportAsset(boardId, pid, dest);
+}
+
+/** Export the current selection. Single image keeps Save As; multi-select picks
+ *  a folder and preserves each source filename inside it. */
+export async function exportImages(boardId: string, ids: string[]): Promise<void> {
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length === 0) return;
+  if (uniqueIds.length === 1) {
+    await exportImage(boardId, uniqueIds[0]);
+    return;
+  }
+
+  const dest = await open({ directory: true, multiple: false, title: "Export images" });
+  if (typeof dest === "string") await ipc.exportAssets(boardId, uniqueIds, dest);
 }

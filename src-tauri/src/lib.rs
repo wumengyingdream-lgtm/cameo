@@ -1,7 +1,7 @@
 //! Cameo — Tauri 2 entry point.
 //!
-//! Wires up logging, the global `~/.cameo` data dir, the `cameo://` image
-//! protocol, the Board registry (in-memory doc authority), the Codex runtime
+//! Wires up logging, the global `~/.cameo` data dir, the Cameo image protocol,
+//! the Board registry (in-memory doc authority), the Codex runtime
 //! registry (one app-server per Board), and all commands. Codex sessions are
 //! tree-killed on app exit.
 
@@ -109,6 +109,7 @@ pub fn run() {
             commands::reveal_in_finder,
             commands::copy_image,
             commands::export_asset,
+            commands::export_assets,
             commands::resolve_chat_image,
             commands::import_chat_image_to_canvas,
             commands::copy_image_from_path,

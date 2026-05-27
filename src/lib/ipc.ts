@@ -64,6 +64,8 @@ export const ipc = {
     invoke<void>("copy_image", { boardId, placementId }),
   exportAsset: (boardId: string, placementId: string, dest: string) =>
     invoke<void>("export_asset", { boardId, placementId, dest }),
+  exportAssets: (boardId: string, placementIds: string[], destDir: string) =>
+    invoke<string[]>("export_assets", { boardId, placementIds, destDir }),
 
   renameAsset: (boardId: string, placementId: string, newName: string) =>
     invoke<string>("rename_asset", { boardId, placementId, newName }),
@@ -113,8 +115,8 @@ export const ipc = {
   // ── Chat-text-embedded image references ───────────────────────────────────
   /** Classify a path string the AI emitted in chat text. Returns whether
    *  it's a real image, whether it lives in the current workspace, the
-   *  workspace-relative path (for in-workspace renders via cameo://) and a
-   *  base64 thumb (for out-of-workspace renders). */
+   *  workspace-relative path (for in-workspace renders via the Cameo image
+   *  protocol) and a base64 thumb (for out-of-workspace renders). */
   resolveChatImage: (boardId: string, rawPath: string) =>
     invoke<ChatImageResolution>("resolve_chat_image", { boardId, rawPath }),
   /** Right-click "添加到画布" — copy outside-workspace bytes into
@@ -140,18 +142,4 @@ export interface ChatImageResolution {
   error: string | null;
 }
 
-/** Build a cross-platform `cameo://` URL for a texture fetch.
- *
- * Board id lives in the path, not the host: WebView2 represents custom
- * protocols as `http://<scheme>.localhost/...`, so host-based routing breaks
- * on Windows. Relative paths are slash-normalized before per-segment encoding.
- */
-export function cameoUrl(boardId: string, relPath: string): string {
-  const encBoard = encodeURIComponent(boardId);
-  const normalized = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
-  const enc = normalized
-    .split("/")
-    .map((seg) => encodeURIComponent(seg))
-    .join("/");
-  return `cameo://localhost/${encBoard}/${enc}`;
-}
+export { cameoUrl } from "./cameo-url";

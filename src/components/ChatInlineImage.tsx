@@ -11,7 +11,7 @@ import { useT } from "../i18n/locale";
  *
  *   • not yet resolved / pending → small placeholder card with the basename
  *   • missing (file gone / not an image) → strikethrough basename, no image
- *   • in-workspace → thumbnail via `cameo://`
+ *   • in-workspace → thumbnail via the Cameo image protocol
  *   • out-of-workspace → base64 thumb data URL from `resolveChatImage`
  *
  * Right-click → context menu that bridges the chat artifact back into the
