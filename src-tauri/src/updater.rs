@@ -60,13 +60,14 @@ fn cache_update(update: Update) {
 }
 
 #[cfg(target_os = "windows")]
-fn take_cached_update(wanted_version: &str) -> Option<Update> {
-    let mut g = LATEST_UPDATE.lock().ok()?;
-    let same = g.as_ref().map(|u| u.version.as_str()) == Some(wanted_version);
-    if !same {
-        return None;
+fn cached_update_for(wanted_version: &str) -> Option<Update> {
+    let g = LATEST_UPDATE.lock().ok()?;
+    let update = g.as_ref()?;
+    if update.version == wanted_version {
+        Some(update.clone())
+    } else {
+        None
     }
-    g.take()
 }
 
 #[cfg(target_os = "windows")]
@@ -77,6 +78,30 @@ fn pending_bin_path() -> std::path::PathBuf {
 #[cfg(target_os = "windows")]
 fn pending_meta_path() -> std::path::PathBuf {
     cameo_data_dir().join("pending_update.json")
+}
+
+#[cfg(target_os = "windows")]
+fn clear_pending_update() {
+    let _ = std::fs::remove_file(pending_bin_path());
+    let _ = std::fs::remove_file(pending_bin_path().with_extension("bin.tmp"));
+    let _ = std::fs::remove_file(pending_meta_path());
+    if let Ok(mut g) = DOWNLOADED_VERSION.lock() {
+        *g = None;
+    }
+    if let Ok(mut g) = LATEST_UPDATE.lock() {
+        *g = None;
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn read_pending_meta() -> Option<PendingMeta> {
+    let meta_path = pending_meta_path();
+    let bin_path = pending_bin_path();
+    if !meta_path.exists() || !bin_path.exists() {
+        return None;
+    }
+    let bytes = std::fs::read(&meta_path).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 #[cfg(target_os = "windows")]
@@ -93,9 +118,7 @@ struct PendingMeta {
 // to fetch the manifest. 15s per-request timeout keeps us off the "hang on a
 // blackholed connection" path.
 fn build_updater_with_proxy(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
-    let mut builder = app
-        .updater_builder()
-        .timeout(Duration::from_secs(15));
+    let mut builder = app.updater_builder().timeout(Duration::from_secs(15));
     let cfg = config::load();
     if cfg.proxy.enabled {
         match cfg.proxy.proxy_url() {
@@ -105,11 +128,17 @@ fn build_updater_with_proxy(app: &AppHandle) -> Result<tauri_plugin_updater::Upd
                     builder = builder.proxy(url);
                 }
                 Err(e) => {
-                    tracing::warn!(module = "updater", "proxy url parse failed ({e}); continuing without");
+                    tracing::warn!(
+                        module = "updater",
+                        "proxy url parse failed ({e}); continuing without"
+                    );
                 }
             },
             Err(e) => {
-                tracing::warn!(module = "updater", "proxy enabled but invalid ({e}); continuing without");
+                tracing::warn!(
+                    module = "updater",
+                    "proxy enabled but invalid ({e}); continuing without"
+                );
             }
         }
     }
@@ -125,7 +154,10 @@ fn build_updater_with_proxy(app: &AppHandle) -> Result<tauri_plugin_updater::Upd
 // by a network round-trip, then runs the silent download path. Errors are
 // swallowed — failed update checks are not the user's problem.
 pub async fn check_update_on_startup(app: AppHandle) {
-    tracing::info!(module = "updater", "scheduling startup update check (60s delay)");
+    tracing::info!(
+        module = "updater",
+        "scheduling startup update check (60s delay)"
+    );
     tokio::time::sleep(Duration::from_secs(60)).await;
     if let Err(e) = check_and_download_silently(&app).await {
         tracing::warn!(module = "updater", "startup update check failed: {e}");
@@ -161,12 +193,11 @@ async fn check_and_download_silently_inner(app: &AppHandle) -> Result<Option<Str
     if let Ok(g) = DOWNLOADED_VERSION.lock() {
         if g.as_deref() == Some(new_version.as_str()) {
             tracing::info!(module = "updater", version = %new_version, "already downloaded this session — skipping");
-            return Ok(None);
+            cache_update(update.clone());
+            let _ = app.emit("updater:ready-to-restart", &new_version);
+            return Ok(Some(new_version));
         }
     }
-
-    // Cache the Update object NOW so the click-handler doesn't need the network.
-    cache_update(update.clone());
 
     let _ = app.emit("updater:download-started", &new_version);
 
@@ -183,7 +214,10 @@ async fn check_and_download_silently_inner(app: &AppHandle) -> Result<Option<Str
                 last_pct_cb.store(pct, Ordering::Relaxed);
                 let _ = progress_app.emit(
                     "updater:download-progress",
-                    DownloadProgress { downloaded: downloaded as u64, total },
+                    DownloadProgress {
+                        downloaded: downloaded as u64,
+                        total,
+                    },
                 );
             }
         }
@@ -217,14 +251,27 @@ async fn check_and_download_silently_inner(app: &AppHandle) -> Result<Option<Str
         // the NSIS install until the user clicks "重启更新". This protects the
         // running app: NSIS does `exit(0)` to swap files, so kicking it off
         // mid-session would kill an unsaved chat.
-        let bytes = update
-            .download(on_chunk, || {})
-            .await
-            .map_err(|e| {
-                tracing::warn!(module = "updater", "windows download failed: {e}");
-                let _ = app.emit("updater:download-failed", &e.to_string());
-                e.to_string()
-            })?;
+        if let Some(meta) = read_pending_meta() {
+            if meta.version == new_version {
+                tracing::info!(
+                    module = "updater",
+                    version = %new_version,
+                    "windows update already persisted; warming install cache"
+                );
+                cache_update(update.clone());
+                if let Ok(mut g) = DOWNLOADED_VERSION.lock() {
+                    *g = Some(new_version.clone());
+                }
+                let _ = app.emit("updater:ready-to-restart", &new_version);
+                return Ok(Some(new_version));
+            }
+        }
+
+        let bytes = update.download(on_chunk, || {}).await.map_err(|e| {
+            tracing::warn!(module = "updater", "windows download failed: {e}");
+            let _ = app.emit("updater:download-failed", &e.to_string());
+            e.to_string()
+        })?;
 
         // Persist bytes via tmp + rename so a crash mid-write doesn't leave a
         // half-baked installer. Meta file written second; readers tolerate it
@@ -243,6 +290,11 @@ async fn check_and_download_silently_inner(app: &AppHandle) -> Result<Option<Str
             serde_json::to_vec(&meta).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
+
+        // Keep the cached Update aligned with the exact bytes on disk. Caching
+        // before the atomic write commits can leave cache=NEW/disk=OLD, which
+        // makes a click during replacement look like a no-op.
+        cache_update(update.clone());
 
         if let Ok(mut g) = DOWNLOADED_VERSION.lock() {
             *g = Some(new_version.clone());
@@ -291,30 +343,41 @@ pub async fn check_and_download_update(app: AppHandle) -> Result<bool, String> {
 // the user hasn't installed yet. Emits the version up to the frontend so the
 // "重启更新" button reappears without re-checking the server.
 #[tauri::command]
-pub fn check_pending_update() -> Option<String> {
+pub fn check_pending_update(app: AppHandle) -> Option<String> {
     #[cfg(target_os = "windows")]
     {
-        let meta_path = pending_meta_path();
-        let bin_path = pending_bin_path();
-        if !meta_path.exists() || !bin_path.exists() {
-            return None;
-        }
-        let bytes = std::fs::read(&meta_path).ok()?;
-        let meta: PendingMeta = serde_json::from_slice(&bytes).ok()?;
-        let current = env!("CARGO_PKG_VERSION");
-        if version_gt(&meta.version, current) {
+        let meta = match read_pending_meta() {
+            Some(meta) => meta,
+            None => {
+                clear_pending_update();
+                return None;
+            }
+        };
+        let current = app.package_info().version.to_string();
+        if version_gt(&meta.version, &current) {
             tracing::info!(module = "updater", version = %meta.version, "found pending update on disk");
+            let app_for_warmup = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if LATEST_UPDATE.lock().map(|g| g.is_some()).unwrap_or(false) {
+                    return;
+                }
+                tracing::info!(
+                    module = "updater",
+                    "warming update cache for pending install"
+                );
+                let _ = check_and_download_silently(&app_for_warmup).await;
+            });
             Some(meta.version)
         } else {
             // Pending update is older than what's installed (manual upgrade?) —
             // clear it so a stale install doesn't downgrade the user.
-            let _ = std::fs::remove_file(&bin_path);
-            let _ = std::fs::remove_file(&meta_path);
+            clear_pending_update();
             None
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = app;
         None
     }
 }
@@ -357,7 +420,7 @@ pub async fn install_pending_update(
     let meta: PendingMeta = serde_json::from_slice(&meta_bytes).map_err(|e| e.to_string())?;
 
     // Resolve an Update object — cache hit avoids the network entirely.
-    let update = match take_cached_update(&meta.version) {
+    let update = match cached_update_for(&meta.version) {
         Some(u) => {
             tracing::info!(module = "updater", version = %meta.version, "using cached Update for install");
             u
@@ -370,11 +433,15 @@ pub async fn install_pending_update(
                 let updater = build_updater_with_proxy(&app)?;
                 match updater.check().await {
                     Ok(Some(u)) if u.version == meta.version => {
+                        cache_update(u.clone());
                         got = Some(u);
                         break;
                     }
                     Ok(Some(u)) => {
-                        last_err = format!("server returned different version {} (expected {})", u.version, meta.version);
+                        last_err = format!(
+                            "server returned different version {} (expected {})",
+                            u.version, meta.version
+                        );
                     }
                     Ok(None) => {
                         last_err = "server reports no update available".into();
@@ -387,22 +454,35 @@ pub async fn install_pending_update(
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
-            got.ok_or_else(|| format!("update resolve failed after 3 attempts: {last_err}"))?
+            if last_err.starts_with("server returned different version")
+                || last_err == "server reports no update available"
+            {
+                clear_pending_update();
+                return Err("VERSION_MISMATCH".into());
+            }
+            got.ok_or_else(|| {
+                tracing::warn!(
+                    module = "updater",
+                    "update resolve failed after 3 attempts: {last_err}"
+                );
+                "NETWORK_ERROR".to_string()
+            })?
         }
     };
 
     // Shut down the Codex sidecar BEFORE NSIS takes the process down with exit(0),
     // so we leave a clean process tree (no orphaned codex children).
-    tracing::info!(module = "updater", "shutting down codex sidecar before install");
+    tracing::info!(
+        module = "updater",
+        "shutting down codex sidecar before install"
+    );
     codex.kill_all_sync();
 
     // Hand off to NSIS. install() spawns the installer and calls exit(0).
-    update
-        .install(bytes)
-        .map_err(|e| {
-            tracing::warn!(module = "updater", "windows install failed: {e}");
-            e.to_string()
-        })?;
+    update.install(bytes).map_err(|e| {
+        tracing::warn!(module = "updater", "windows install failed: {e}");
+        e.to_string()
+    })?;
 
     Ok(())
 }
@@ -416,7 +496,10 @@ pub async fn install_pending_update(
     app: AppHandle,
     codex: State<'_, Arc<CodexRegistry>>,
 ) -> Result<(), String> {
-    tracing::info!(module = "updater", "shutting down codex sidecar before relaunch");
+    tracing::info!(
+        module = "updater",
+        "shutting down codex sidecar before relaunch"
+    );
     codex.kill_all_sync();
     app.restart();
 }

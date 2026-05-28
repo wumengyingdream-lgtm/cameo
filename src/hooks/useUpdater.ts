@@ -21,6 +21,7 @@ import { listen } from "@tauri-apps/api/event";
 export function useUpdater() {
   const [pendingVersion, setPendingVersion] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
+  const [preparing, setPreparing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,15 +30,23 @@ export function useUpdater() {
     // Live event: silent download finished (mac install done, or win bytes on disk).
     void listen<string>("updater:ready-to-restart", (event) => {
       if (cancelled) return;
+      setPreparing(false);
       setPendingVersion(event.payload || null);
     }).then((un) => unsubs.push(un));
 
+    // A newer package is being downloaded/replacing the pending bytes. Hide
+    // the install button until disk and the cached Update object align again.
+    void listen<string>("updater:download-started", () => {
+      if (cancelled) return;
+      setPreparing(true);
+    }).then((un) => unsubs.push(un));
+
     // Live event: download failed. We don't surface anything to the user
-    // (silent failures are an explicit product decision); just clear any
-    // stale pending state so the button doesn't lie.
+    // (silent failures are an explicit product decision); if older pending
+    // bytes still exist, the button can reappear and retry them.
     void listen<string>("updater:download-failed", () => {
       if (cancelled) return;
-      setPendingVersion(null);
+      setPreparing(false);
     }).then((un) => unsubs.push(un));
 
     // Windows only: bytes on disk from a previous session — reveal the button
@@ -71,5 +80,5 @@ export function useUpdater() {
     }
   }, [installing, pendingVersion]);
 
-  return { pendingVersion, installing, restart };
+  return { pendingVersion: preparing ? null : pendingVersion, installing, restart };
 }
