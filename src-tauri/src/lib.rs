@@ -84,6 +84,8 @@ pub fn run() {
             front_log,
             commands::cfg_load,
             commands::cfg_save,
+            commands::probe_proxy,
+            commands::probe_codex_network,
             device::device_id_get,
             device::device_id_reset,
             updater::check_and_download_update,

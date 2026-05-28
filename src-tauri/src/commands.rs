@@ -1254,6 +1254,25 @@ pub fn cfg_save(config: crate::config::AppConfig) -> Result<(), String> {
     crate::config::save(&config).map_err(e2s)
 }
 
+/// Probe the Settings proxy endpoint with a lightweight connectivity check.
+#[tauri::command]
+pub async fn probe_proxy(
+    protocol: String,
+    host: String,
+    port: u16,
+) -> crate::proxy::ProxyProbeResult {
+    crate::proxy::probe_connectivity(protocol, host, port).await
+}
+
+/// Run the same lightweight connectivity check directly, or through the
+/// configured proxy when proxy is enabled. This is a diagnostic hint, not an
+/// OpenAI/Codex service reachability check.
+#[tauri::command]
+pub async fn probe_codex_network() -> crate::proxy::ProxyProbeResult {
+    let cfg = crate::config::load();
+    crate::proxy::probe_codex_connectivity(&cfg.proxy).await
+}
+
 /// Open the unified log folder (`~/.cameo/logs`) in the OS file manager.
 #[tauri::command]
 pub fn open_logs_dir() -> Result<(), String> {

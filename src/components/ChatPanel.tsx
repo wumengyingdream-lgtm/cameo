@@ -232,6 +232,19 @@ function TodoFloat() {
   );
 }
 
+function NetworkWarning({ onOpenSettings }: { onOpenSettings: () => void }) {
+  const t = useT();
+  return (
+    <div className="cm-netwarn" role="status">
+      <TriangleAlert size={13} className="cm-netwarn__ico" />
+      <span className="cm-netwarn__text">{t("chat.networkBlocked")}</span>
+      <button type="button" className="cm-netwarn__link" onClick={onOpenSettings}>
+        {t("chat.networkProxyLink")}
+      </button>
+    </div>
+  );
+}
+
 /** Generated image row backed by Board-scoped object URLs. */
 function GeneratedImageBlock({ placementId }: { placementId: string }) {
   const t = useT();
@@ -597,21 +610,57 @@ function TextBlockRender({ text, seenPaths }: { text: string; seenPaths?: Set<st
   return <AssistantMarkdown text={text} seenPaths={seenPaths} />;
 }
 
-export function ChatPanel() {
+export function ChatPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   const sessionStatus = useChatStore((s) => s.sessionStatus);
   const messages = useChatStore((s) => s.messages);
   const rateLimit = useChatStore((s) => s.rateLimit);
   const chatWidth = useUiStore((s) => s.chatWidth);
   const setChatWidth = useUiStore((s) => s.setChatWidth);
+  const restartNonce = useSettingsStore((s) => s.restartNonce);
+  const [networkBlocked, setNetworkBlocked] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const cleanupResizeRef = useRef<(() => void) | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const pendingWidthRef = useRef(chatWidth);
+  const networkProbeGenerationRef = useRef(0);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  useEffect(() => {
+    if (sessionStatus === "starting") {
+      networkProbeGenerationRef.current += 1;
+      setNetworkBlocked(false);
+      return;
+    }
+
+    const generation = networkProbeGenerationRef.current + 1;
+    networkProbeGenerationRef.current = generation;
+    setNetworkBlocked(false);
+
+    const timer = window.setTimeout(() => {
+      void ipc
+        .detectCodex()
+        .then((info) => {
+          if (networkProbeGenerationRef.current !== generation || !info.found) return null;
+          return ipc.probeCodexNetwork();
+        })
+        .then((result) => {
+          if (networkProbeGenerationRef.current !== generation || !result) return;
+          setNetworkBlocked(!result.ok);
+        })
+        .catch(() => {
+          if (networkProbeGenerationRef.current === generation) setNetworkBlocked(true);
+        });
+    }, 600);
+
+    return () => {
+      window.clearTimeout(timer);
+      networkProbeGenerationRef.current += 1;
+    };
+  }, [restartNonce, sessionStatus]);
 
   useEffect(() => {
     return () => {
@@ -697,6 +746,7 @@ export function ChatPanel() {
       <div className="cm-chat__bottom">
         <TodoFloat />
         <MarkStaging />
+        {networkBlocked && <NetworkWarning onOpenSettings={onOpenSettings} />}
         <Composer />
       </div>
     </div>

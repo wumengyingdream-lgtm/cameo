@@ -7,6 +7,8 @@ import type {
   ImportResult,
   Placement,
   PlacementUpdate,
+  ProxyProbeResult,
+  ProxySettings,
   SessionsDoc,
   Shape,
   WorkspaceEntry,
@@ -103,6 +105,9 @@ export const ipc = {
   // App config (global ~/.cameo/config.json) + diagnostics
   cfgLoad: () => invoke<AppConfig>("cfg_load"),
   cfgSave: (config: AppConfig) => invoke<void>("cfg_save", { config }),
+  probeProxy: (protocol: ProxySettings["protocol"], host: string, port: number) =>
+    invoke<ProxyProbeResult>("probe_proxy", { protocol, host, port }),
+  probeCodexNetwork: () => invoke<ProxyProbeResult>("probe_codex_network"),
   /** Anonymous install identity (UUID v4). Generated on first call. */
   deviceIdGet: () => invoke<string>("device_id_get"),
   /** Wipe ~/.cameo/device_id; next launch mints a new one. */

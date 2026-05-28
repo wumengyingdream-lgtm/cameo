@@ -113,6 +113,7 @@ interface SnapMatch {
 
 const MIN_SCALE = 0.02;
 const MAX_SCALE = 12;
+const ZOOM_STEP = 1.2;
 const SNAP_THRESHOLD_PX = 8;
 const SNAP_GUIDE_PAD = 28;
 const DRAG_START_THRESHOLD_PX = 5;
@@ -124,6 +125,7 @@ const ACCENT = 0xe53935;
 const GUIDE = 0xf87171;
 const HALO = 0xffffff;
 const CANVAS_BG = "#F5F5F7";
+const HANDLE_CURSORS = ["nwse-resize", "nesw-resize", "nwse-resize", "nesw-resize"] as const;
 const CORNER_SIGNS: [number, number][] = [
   [-1, -1],
   [1, -1],
@@ -227,6 +229,7 @@ export class CanvasScene {
   private dragOrigin = new Map<string, { x: number; y: number }>();
   private moved = false;
   private spacePan = false;
+  private spacePanDrag = false;
   private marqueeStart = { x: 0, y: 0 };
   private marqueeAdditive = false;
   private gestureLastScale = 1;
@@ -736,6 +739,11 @@ export class CanvasScene {
     this.applyCamera();
   }
 
+  zoomStep(direction: "in" | "out"): void {
+    const s = this.safeRect();
+    this.zoomAt(s.cx, s.cy, direction === "in" ? ZOOM_STEP : 1 / ZOOM_STEP);
+  }
+
   /** Bottom-right overview: all placements + the current viewport rect. */
   private drawMinimap(): void {
     const g = this.minimapGfx;
@@ -917,6 +925,11 @@ export class CanvasScene {
             ? "move"
             : "crosshair";
     for (const n of this.nodes.values()) n.container.cursor = nodeCursor;
+    const handleCursor = panning ? "grabbing" : this.spacePan ? "grab" : null;
+    for (let i = 0; i < this.cornerHandles.length; i++) {
+      this.cornerHandles[i].cursor = handleCursor ?? HANDLE_CURSORS[i];
+    }
+    if (this.rotateHandle) this.rotateHandle.cursor = handleCursor ?? "grab";
   }
 
   // ── Annotations ───────────────────────────────────────────────────────────
@@ -1337,12 +1350,11 @@ export class CanvasScene {
   // ── Transform handles (resize / rotate the single selected node) ───────────
 
   private createHandles(): void {
-    const cursors = ["nwse-resize", "nesw-resize", "nwse-resize", "nesw-resize"];
     for (let i = 0; i < 4; i++) {
       const g = new Graphics();
       g.rect(-4, -4, 8, 8).fill({ color: 0xffffff }).stroke({ width: 1.5, color: ACCENT });
       g.eventMode = "static";
-      g.cursor = cursors[i];
+      g.cursor = HANDLE_CURSORS[i];
       g.hitArea = new Rectangle(-9, -9, 18, 18);
       g.visible = false;
       g.on("pointerdown", (e: FederatedPointerEvent) => this.onHandleDown("resize", e, i));
@@ -1396,6 +1408,10 @@ export class CanvasScene {
   }
 
   private onHandleDown(kind: "resize" | "rotate", e: FederatedPointerEvent, handleIndex = 0): void {
+    if (e.button === 1 || (e.button === 0 && this.spacePan)) {
+      this.beginPan(e, e.button === 0);
+      return;
+    }
     if (e.button !== 0) return;
     e.stopPropagation();
     this.clearSnapGuides();
@@ -1462,15 +1478,19 @@ export class CanvasScene {
     }
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
+    window.addEventListener("blur", this.onWindowBlur);
   }
 
-  private editableTarget(target: EventTarget | null): boolean {
-    const el = target as HTMLElement | null;
-    return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  private keyboardTargetConsumesSpace(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+    if (target instanceof HTMLElement && target.isContentEditable) return true;
+    return !!target.closest(
+      "input, textarea, select, button, a[href], [role='button'], [role='switch'], [role='checkbox'], [role='menuitem']",
+    );
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
-    if (e.code !== "Space" || this.editableTarget(e.target)) return;
+    if (e.code !== "Space" || this.keyboardTargetConsumesSpace(e.target)) return;
     if (this.cropActive) return;
     if (document.querySelector(".cm-ctx, .cm-modal-backdrop, .cm-gallery-backdrop, .cm-gdetail-backdrop, .cm-compare")) return;
     e.preventDefault();
@@ -1482,9 +1502,23 @@ export class CanvasScene {
 
   private onKeyUp = (e: KeyboardEvent): void => {
     if (e.code !== "Space") return;
-    this.spacePan = false;
-    this.refreshCursor();
+    this.releaseSpacePan();
   };
+
+  private onWindowBlur = (): void => {
+    this.releaseSpacePan();
+  };
+
+  private releaseSpacePan(): void {
+    const wasSpacePan = this.spacePan;
+    this.spacePan = false;
+    if (this.mode === "pan" && this.spacePanDrag) {
+      this.mode = "idle";
+      this.spacePanDrag = false;
+      this.moved = false;
+    }
+    if (wasSpacePan || this.mode === "idle") this.refreshCursor();
+  }
 
   private onAuxClickDom = (e: MouseEvent): void => {
     if (e.button === 1) e.preventDefault();
@@ -1494,12 +1528,13 @@ export class CanvasScene {
     return Math.hypot(x - start.x, y - start.y);
   }
 
-  private beginPan(e: FederatedPointerEvent): void {
+  private beginPan(e: FederatedPointerEvent, bySpace: boolean): void {
     e.preventDefault();
     e.stopPropagation();
     this.clearSnapGuides();
     this.marqueeGfx.clear();
     this.mode = "pan";
+    this.spacePanDrag = bySpace;
     this.moved = false;
     this.lastPointer = { x: e.global.x, y: e.global.y };
     this.refreshCursor();
@@ -1549,7 +1584,7 @@ export class CanvasScene {
   private onNodePointerDown(id: string, e: FederatedPointerEvent): void {
     if (this.cropActive) return; // only the crop frame is interactive while cropping
     if (e.button === 1 || (e.button === 0 && this.spacePan)) {
-      this.beginPan(e);
+      this.beginPan(e, e.button === 0);
       return;
     }
     if (e.button !== 0) return;
@@ -1631,7 +1666,7 @@ export class CanvasScene {
   private onStagePointerDown(e: FederatedPointerEvent): void {
     if (this.cropActive) return; // crop mode: ignore canvas marquee/deselect
     if (e.button === 1 || (e.button === 0 && this.spacePan)) {
-      this.beginPan(e);
+      this.beginPan(e, e.button === 0);
       return;
     }
     if (e.button !== 0) return;
@@ -1836,6 +1871,7 @@ export class CanvasScene {
     }
     this.clearSnapGuides();
     this.mode = "idle";
+    this.spacePanDrag = false;
     this.refreshCursor();
   }
 
@@ -1971,6 +2007,7 @@ export class CanvasScene {
     }
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
+    window.removeEventListener("blur", this.onWindowBlur);
     if (this.inited) {
       try {
         this.app.destroy(true, { children: true });
