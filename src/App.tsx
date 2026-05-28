@@ -7,6 +7,8 @@ import {
   Map as MapIcon,
   Undo2,
   Redo2,
+  Minus,
+  Plus,
   ChevronDown,
   Square,
   Circle,
@@ -171,7 +173,7 @@ function Toolbar() {
 function Hud() {
   const stats = useUiStore((s) => s.stats);
   const minimapVisible = useUiStore((s) => s.minimapVisible);
-  const sel = useBoardStore((s) => s.selection.size);
+  const canvasZoom = useUiStore((s) => s.canvasZoom);
   const canUndo = useHistoryStore((s) => s.undoStack.length > 0);
   const canRedo = useHistoryStore((s) => s.redoStack.length > 0);
   const t = useT();
@@ -200,9 +202,36 @@ function Hud() {
       >
         <Redo2 size={15} />
       </button>
-      {sel > 0 && <span className="cm-hud__sel">{t("hud.selected", { count: sel })}</span>}
       <span>{stats.fps} fps</span>
-      <span>{Math.round(stats.zoom * 100)}%</span>
+      <span className="cm-hud__zoom" aria-label={`${Math.round(stats.zoom * 100)}%`}>
+        <button
+          className="cm-hud__btn cm-hud__zoombtn"
+          disabled={!canvasZoom}
+          title={t("hud.zoomOut")}
+          aria-label={t("hud.zoomOut")}
+          onClick={() => canvasZoom?.("out")}
+        >
+          <Minus size={13} />
+        </button>
+        <button
+          className="cm-hud__zoomvalue"
+          disabled={!canvasZoom}
+          title={t("hud.zoomReset")}
+          aria-label={t("hud.zoomReset")}
+          onClick={() => canvasZoom?.("reset")}
+        >
+          {Math.round(stats.zoom * 100)}%
+        </button>
+        <button
+          className="cm-hud__btn cm-hud__zoombtn"
+          disabled={!canvasZoom}
+          title={t("hud.zoomIn")}
+          aria-label={t("hud.zoomIn")}
+          onClick={() => canvasZoom?.("in")}
+        >
+          <Plus size={13} />
+        </button>
+      </span>
     </div>
   );
 }

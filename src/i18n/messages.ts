@@ -27,6 +27,9 @@ export const en = {
   "hud.undo": "Undo (⌘Z)",
   "hud.redo": "Redo (⌘⇧Z)",
   "hud.selected": "{count} selected",
+  "hud.zoomOut": "Zoom out",
+  "hud.zoomIn": "Zoom in",
+  "hud.zoomReset": "Reset zoom to 100%",
 
   // Empty state
   "empty.lead": "An image-first canvas for your local Codex agent.",
@@ -211,6 +214,9 @@ export const zh: Record<MsgKey, string> = {
   "hud.undo": "撤销 (⌘Z)",
   "hud.redo": "重做 (⌘⇧Z)",
   "hud.selected": "已选 {count}",
+  "hud.zoomOut": "缩小画布",
+  "hud.zoomIn": "放大画布",
+  "hud.zoomReset": "恢复到 100%",
 
   "empty.lead": "为本机 Codex 打造的 image-first 画布。",
   "empty.new": "新建工作区",

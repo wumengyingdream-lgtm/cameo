@@ -112,6 +112,7 @@ interface SnapMatch {
 
 const MIN_SCALE = 0.02;
 const MAX_SCALE = 12;
+const ZOOM_STEP = 1.2;
 const SNAP_THRESHOLD_PX = 8;
 const SNAP_GUIDE_PAD = 28;
 const DRAG_START_THRESHOLD_PX = 5;
@@ -719,6 +720,11 @@ export class CanvasScene {
     this.cam.x = s.cx - cx;
     this.cam.y = s.cy - cy;
     this.applyCamera();
+  }
+
+  zoomStep(direction: "in" | "out"): void {
+    const s = this.safeRect();
+    this.zoomAt(s.cx, s.cy, direction === "in" ? ZOOM_STEP : 1 / ZOOM_STEP);
   }
 
   /** Bottom-right overview: all placements + the current viewport rect. */

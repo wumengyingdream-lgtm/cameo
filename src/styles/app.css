@@ -378,10 +378,6 @@ body,
   backdrop-filter: blur(8px);
   box-shadow: var(--cm-shadow-1);
 }
-.cm-hud__sel {
-  color: var(--cm-accent);
-  font-weight: 600;
-}
 .cm-hud__btn {
   appearance: none;
   border: none;
@@ -399,6 +395,10 @@ body,
   background: var(--cm-gray-100);
   color: var(--cm-fg);
 }
+.cm-hud__btn:focus-visible {
+  outline: none;
+  box-shadow: var(--cm-focus-ring);
+}
 .cm-hud__btn:disabled {
   opacity: 0.35;
   cursor: default;
@@ -406,6 +406,41 @@ body,
 .cm-hud__btn.is-active {
   color: var(--cm-accent);
   background: var(--cm-accent-bg);
+}
+.cm-hud__zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.cm-hud__zoombtn {
+  width: 20px;
+  height: 20px;
+  padding: 2px;
+}
+.cm-hud__zoomvalue {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--cm-radius-sm);
+  min-width: 34px;
+  text-align: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.cm-hud__zoomvalue:hover:not(:disabled) {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-hud__zoomvalue:focus-visible {
+  outline: none;
+  box-shadow: var(--cm-focus-ring);
+}
+.cm-hud__zoomvalue:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 /* ── Chat panel ─────────────────────────────────────────────────────────── */
