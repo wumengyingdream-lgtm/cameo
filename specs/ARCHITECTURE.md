@@ -113,8 +113,10 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
    └───────────────────────────────┘
 ```
 
-- **唯一对外网络** = Codex sidecar。WebView 只读本地 Cameo 图片协议，Rust 后端只读写本地文件（+
-  可选 cloud telemetry / gallery，见 §7）。
+- **常规对外网络** = Codex sidecar。WebView 只读本地 Cameo 图片协议，Rust 后端只读写本地文件（+
+  可选 cloud telemetry / gallery，见 §7）。例外：Settings 里启用代理后，Rust 会做一次显式代理
+  诊断 probe，只连接用户配置的代理 endpoint，并通过代理对 `chatgpt.com:443` 做 CONNECT/SOCKS5
+  握手；不携带账号、prompt 或图片内容。
 - **进程清理纪律**：unix 走 `nix` 进程组 SIGTERM→SIGKILL，win 走 `taskkill /T /F`（`codex.rs`
   里 `kill_tree` 两个 `#[cfg]` 版本）—— 关 app / 换 Board / interrupt turn 都不能留僵尸。
 
@@ -243,6 +245,9 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 - 用户切换/登出 Codex → Cameo 不感知，Codex sidecar 自己处理。
 - 代理仅注入 Codex sidecar 的 env；保存设置后**自动重启当前 session**（`settings.restartNonce`
   → `App.tsx` 的会话 effect 依赖它）让新代理生效。
+- 代理开关开启且 host / port 有效时，Settings 会触发 `proxy.rs::probe_connectivity`：先连本地
+  代理端口，再按所选协议做 HTTP CONNECT 或 SOCKS5 CONNECT 到 `chatgpt.com:443`。结果只用于
+  设置面板的文字反馈，帮助用户发现端口、协议、认证或代理节点问题；不参与 agent 语义。
 
 详细的 file:line 索引见 `research/research_codex_runtime.md`（maintainer 本地）。
 

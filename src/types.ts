@@ -119,6 +119,17 @@ export interface AppConfig {
   close_to_tray: boolean;
 }
 
+// Mirrors src-tauri/src/proxy.rs ProxyProbeResult.
+export interface ProxyProbeResult {
+  ok: boolean;
+  stage: string;
+  kind: string;
+  message: string;
+  detail: string | null;
+  httpStatus: number | null;
+  url: string;
+}
+
 // Mirrors src-tauri/src/codex.rs CodexInfo — local Codex CLI detection.
 export interface CodexInfo {
   found: boolean;

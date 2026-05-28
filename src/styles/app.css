@@ -36,6 +36,7 @@
   --cm-danger-bg: #feecec;
   --cm-danger-strong: #b91c1c;
   --cm-info: #64748b;
+  --cm-info-bg: #eef1f4;
 
   /* ── semantic aliases (components reference these) ────────────────────── */
   --cm-bg: var(--cm-gray-50);
@@ -2536,6 +2537,39 @@ body.cm-chat-resizing {
 }
 .cm-set-hint--err {
   color: var(--cm-danger);
+}
+.cm-set-probe {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--cm-radius-md);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.cm-set-probe--checking {
+  background: var(--cm-info-bg);
+  color: var(--cm-info);
+}
+.cm-set-probe--ok {
+  background: var(--cm-success-bg);
+  color: var(--cm-success);
+}
+.cm-set-probe--error {
+  background: var(--cm-danger-bg);
+  color: var(--cm-danger);
+}
+.cm-set-probe__icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.cm-set-probe__spin {
+  animation: cm-spin 0.9s linear infinite;
+}
+.cm-set-probe__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .cm-code {
   font-family: var(--cm-font-mono);

@@ -1203,6 +1203,16 @@ pub fn cfg_save(config: crate::config::AppConfig) -> Result<(), String> {
     crate::config::save(&config).map_err(e2s)
 }
 
+/// Probe the Settings proxy endpoint before/after applying it to Codex.
+#[tauri::command]
+pub async fn probe_proxy(
+    protocol: String,
+    host: String,
+    port: u16,
+) -> crate::proxy::ProxyProbeResult {
+    crate::proxy::probe_connectivity(protocol, host, port).await
+}
+
 /// Open the unified log folder (`~/.cameo/logs`) in the OS file manager.
 #[tauri::command]
 pub fn open_logs_dir() -> Result<(), String> {
