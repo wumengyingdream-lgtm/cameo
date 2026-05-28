@@ -102,6 +102,7 @@ pub fn run() {
             commands::open_board,
             commands::import_paths,
             commands::import_image_bytes,
+            commands::read_asset_bytes,
             commands::update_placements,
             commands::delete_placements,
             commands::restore_placements,

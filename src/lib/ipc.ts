@@ -40,6 +40,9 @@ export const ipc = {
   importImageBytes: (boardId: string, bytes: number[], ext: string, stem: string) =>
     invoke<ImportResult>("import_image_bytes", { boardId, bytes, ext, stem }),
 
+  readAssetBytes: (boardId: string, relPath: string) =>
+    invoke<number[]>("read_asset_bytes", { boardId, relPath }),
+
   updatePlacements: (boardId: string, updates: PlacementUpdate[]) =>
     invoke<void>("update_placements", { boardId, updates }),
 

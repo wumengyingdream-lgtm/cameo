@@ -3,7 +3,8 @@ import { Copy, FileText, FolderOpen, Image, ImagePlus, Maximize } from "lucide-r
 import { useChatStore } from "../store/chat";
 import { useBoardStore } from "../store/board";
 import { useComposerStore } from "../store/composer";
-import { cameoUrl, ipc } from "../lib/ipc";
+import { ipc } from "../lib/ipc";
+import { useAssetObjectUrl } from "../lib/asset-url";
 import { useT } from "../i18n/locale";
 
 /**
@@ -59,6 +60,12 @@ export function ChatInlineImage({ path }: { path: string }) {
   const isPending = resolution === undefined || resolution === "pending";
   const isMissing =
     resolution === "missing" || (typeof resolution === "object" && !resolution.exists);
+  const res = typeof resolution === "object" && resolution.exists ? resolution : null;
+  const workspaceThumb = useAssetObjectUrl(
+    res?.inWorkspace ? boardId : null,
+    res?.inWorkspace ? res.workspaceRelPath ?? null : null,
+    "image/png",
+  );
 
   if (isPending) {
     return (
@@ -77,11 +84,8 @@ export function ChatInlineImage({ path }: { path: string }) {
     );
   }
 
-  // Resolution is a real ChatImageResolution at this point.
-  const res = resolution as Exclude<typeof resolution, "pending" | "missing" | undefined>;
-  const thumbSrc = res.inWorkspace && res.workspaceRelPath && boardId
-    ? cameoUrl(boardId, res.workspaceRelPath)
-    : res.thumbDataUrl ?? "";
+  if (!res) return null;
+  const thumbSrc = res.inWorkspace ? workspaceThumb ?? "" : res.thumbDataUrl ?? "";
   const existingPlacementId = addedPlacementId ?? res.existingPlacementId ?? null;
 
   // Resolved → render as an actual visible thumbnail (not a chip). Right-click

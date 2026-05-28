@@ -22,6 +22,7 @@
         "hiddenTitle": true,
         "decorations": true,
         "transparent": false,
+        "zoomHotkeysEnabled": true,
         "backgroundColor": "#FAFAFA",
         "trafficLightPosition": { "x": 16, "y": 18 }
       }

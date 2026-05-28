@@ -423,6 +423,36 @@ fn asset_abs_path(entry: &BoardEntry, placement_id: &str) -> Result<PathBuf, Str
     Ok(abs)
 }
 
+fn asset_rel_abs_path(entry: &BoardEntry, rel: &str) -> Result<PathBuf, String> {
+    let rel_path = PathBuf::from(rel);
+    for comp in rel_path.components() {
+        if !matches!(comp, Component::Normal(_)) {
+            return Err("asset path escapes the board folder".into());
+        }
+    }
+
+    let abs = entry.folder.join(&rel_path).canonicalize().map_err(e2s)?;
+    let root = entry.folder.canonicalize().map_err(e2s)?;
+    if !abs.starts_with(&root) {
+        return Err("asset path escapes the board folder".into());
+    }
+    Ok(abs)
+}
+
+/// Read image bytes for a Board-relative asset. This is intentionally scoped to
+/// the current Board folder and exists as a WebView2-safe fallback when the
+/// custom image protocol cannot be fetched on Windows.
+#[tauri::command]
+pub fn read_asset_bytes(
+    board_id: String,
+    rel_path: String,
+    registry: State<Arc<BoardRegistry>>,
+) -> Result<Vec<u8>, String> {
+    let entry = registry.get(&board_id).ok_or("unknown board")?;
+    let path = asset_rel_abs_path(&entry, &rel_path)?;
+    std::fs::read(path).map_err(e2s)
+}
+
 /// Reveal the backing file in the OS file manager (Finder / Explorer / Linux).
 #[tauri::command]
 pub fn reveal_in_finder(

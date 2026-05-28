@@ -12,6 +12,7 @@ import {
 } from "pixi.js";
 import type { Asset, Placement, PlacementUpdate, Shape, ShapeKind } from "../types";
 import { cameoUrl, ipc } from "../lib/ipc";
+import { loadAssetObjectUrl } from "../lib/asset-url";
 
 export type Tool = "select" | "point" | "rect" | "ellipse" | "brush";
 
@@ -146,6 +147,17 @@ async function loadTexture(url: string): Promise<Texture> {
   return Texture.from(bitmap);
 }
 
+async function loadBoardTexture(boardId: string, asset: Asset): Promise<Texture> {
+  const url = cameoUrl(boardId, asset.path);
+  try {
+    return await loadTexture(url);
+  } catch (err) {
+    void ipc.frontLog("warn", `protocol texture load failed ${asset.path}: ${err}; using IPC bytes`);
+    const objectUrl = await loadAssetObjectUrl(boardId, asset.path, asset.mime);
+    return loadTexture(objectUrl);
+  }
+}
+
 /**
  * The PixiJS canvas controller — imperative GPU layer. React pushes data in via
  * `setData`/`setSelection` and receives gestures back through callbacks; it
@@ -213,6 +225,7 @@ export class CanvasScene {
   private spacePan = false;
   private marqueeStart = { x: 0, y: 0 };
   private marqueeAdditive = false;
+  private gestureLastScale = 1;
   // Screen-space padding kept clear of the floating chrome (topbar / toolbar /
   // sidebar / AI panel) so fit + reveal land content in the VISIBLE area.
   private safeInset = { left: 0, right: 0, top: 0, bottom: 0 };
@@ -794,8 +807,7 @@ export class CanvasScene {
     this.nodes.set(p.id, node);
 
     if (this.boardId && asset) {
-      const url = cameoUrl(this.boardId, asset.path);
-      loadTexture(url)
+      loadBoardTexture(this.boardId, asset)
         .then((tex) => {
           const current = this.nodes.get(p.id);
           if (this.destroyed || current !== node || current.assetId !== p.assetId) {
@@ -814,7 +826,7 @@ export class CanvasScene {
           this.drawAnnotation(p.id, node, this.annotations.get(p.id) ?? []);
         })
         .catch((err) => {
-          console.error("texture load failed", url, err);
+          console.error("texture load failed", asset.path, err);
           void ipc.frontLog("error", `texture load failed ${asset.path}: ${err}`);
         });
     }
@@ -1437,6 +1449,9 @@ export class CanvasScene {
     const canvas = this.canvasEl;
     if (canvas) {
       canvas.addEventListener("wheel", this.onWheel, { passive: false });
+      canvas.addEventListener("gesturestart", this.onGestureStart as EventListener, { passive: false });
+      canvas.addEventListener("gesturechange", this.onGestureChange as EventListener, { passive: false });
+      canvas.addEventListener("gestureend", this.onGestureEnd as EventListener, { passive: false });
       // Native right-click → custom context menu (suppress the browser menu).
       canvas.addEventListener("contextmenu", this.onContextMenuDom);
       canvas.addEventListener("auxclick", this.onAuxClickDom);
@@ -1854,11 +1869,39 @@ export class CanvasScene {
 
   // ── Camera ────────────────────────────────────────────────────────────────
 
+  private onGestureStart = (e: Event): void => {
+    e.preventDefault();
+    this.gestureLastScale = 1;
+  };
+
+  private onGestureChange = (e: Event): void => {
+    e.preventDefault();
+    const ge = e as Event & { scale?: number; clientX?: number; clientY?: number };
+    const nextScale = typeof ge.scale === "number" && Number.isFinite(ge.scale) ? ge.scale : 1;
+    const factor = nextScale / this.gestureLastScale;
+    this.gestureLastScale = nextScale;
+    if (!Number.isFinite(factor) || factor <= 0 || !this.canvasEl) return;
+    const rect = this.canvasEl.getBoundingClientRect();
+    const sx = (ge.clientX ?? rect.left + rect.width / 2) - rect.left;
+    const sy = (ge.clientY ?? rect.top + rect.height / 2) - rect.top;
+    this.zoomAt(sx, sy, factor);
+  };
+
+  private onGestureEnd = (e: Event): void => {
+    e.preventDefault();
+    this.gestureLastScale = 1;
+  };
+
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
-    if (e.ctrlKey || e.metaKey) {
-      const factor = Math.exp(-e.deltaY * 0.01);
-      this.zoomAt(e.offsetX, e.offsetY, factor);
+    if (e.ctrlKey || e.metaKey || e.deltaZ !== 0) {
+      const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 800 : 1;
+      const delta = e.deltaZ !== 0 ? e.deltaZ : e.deltaY * unit;
+      const factor = Math.exp(-delta * 0.01);
+      const rect = this.canvasEl?.getBoundingClientRect();
+      const sx = rect ? e.clientX - rect.left : e.offsetX;
+      const sy = rect ? e.clientY - rect.top : e.offsetY;
+      this.zoomAt(sx, sy, factor);
     } else {
       this.cam.x -= e.deltaX;
       this.cam.y -= e.deltaY;
@@ -1916,6 +1959,9 @@ export class CanvasScene {
     this.commentEl = null;
     if (this.canvasEl) {
       this.canvasEl.removeEventListener("wheel", this.onWheel);
+      this.canvasEl.removeEventListener("gesturestart", this.onGestureStart as EventListener);
+      this.canvasEl.removeEventListener("gesturechange", this.onGestureChange as EventListener);
+      this.canvasEl.removeEventListener("gestureend", this.onGestureEnd as EventListener);
       this.canvasEl.removeEventListener("contextmenu", this.onContextMenuDom);
       this.canvasEl.removeEventListener("auxclick", this.onAuxClickDom);
     }

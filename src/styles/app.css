@@ -137,10 +137,13 @@ body,
   position: absolute;
   inset: 0;
   overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
 }
 
 .cm-canvas-host canvas {
   display: block;
+  touch-action: none;
 }
 
 /* ── Topbar (overlay over the canvas) ───────────────────────────────────── */
