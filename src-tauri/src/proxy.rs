@@ -15,12 +15,13 @@
 //!    dropped ("websocket closed by server before response.completed"). Setting
 //!    ALL_PROXY to the same value can't shadow HTTP(S)_PROXY (they match), so
 //!    we get full coverage without the stale-value footgun. When DISABLED we
-//!    still `env_remove` ALL_PROXY so an inherited stale value can't reroute.
-//! 3. Always inject `NO_PROXY=localhost,...` — even when disabled — so an
-//!    inherited system proxy never reroutes localhost.
+//!    strip inherited proxy env so the setting and the sidecar path agree.
+//! 3. Always inject `NO_PROXY=localhost,...` — even when disabled — so local
+//!    IPC never routes through a system proxy.
 //! 4. Fail-safe on invalid config: strip all proxy env rather than leaving a
 //!    partial / dangerous state.
 
+use std::net::Ipv6Addr;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -31,7 +32,7 @@ use tokio::time::timeout;
 /// Localhost coverage: DNS names + IPv4 loopback range + IPv6 loopback.
 const LOCALHOST_NO_PROXY: &str = "localhost,localhost.localdomain,127.0.0.1,127.0.0.0/8,::1,[::1]";
 
-const ALLOWED_PROTOCOLS: &[&str] = &["http", "https", "socks5"];
+const ALLOWED_PROTOCOLS: &[&str] = &["http", "socks5"];
 
 pub const GOOGLE_CONNECTIVITY_CHECK_URL: &str = "http://connectivitycheck.gstatic.com/generate_204";
 
@@ -40,13 +41,14 @@ const PROBE_TARGET_PATH: &str = "/generate_204";
 const PROBE_TARGET_PORT: u16 = 80;
 const PROBE_CONNECT_TIMEOUT_MS: u64 = 1_500;
 const PROBE_HANDSHAKE_TIMEOUT_MS: u64 = 5_000;
+const PROBE_RESPONSE_HEAD_MAX_BYTES: usize = 4096;
 const PROBE_USER_AGENT: &str = "Cameo-Proxy-Probe/1.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxySettings {
     pub enabled: bool,
-    /// "http" | "https" | "socks5". UI exposes http / socks5; https accepted for
-    /// hand-edits.
+    /// "http" | "socks5". The configured proxy is used for HTTP, HTTPS, and WSS
+    /// traffic via HTTP(S)_PROXY + ALL_PROXY env vars.
     pub protocol: String,
     pub host: String,
     pub port: u16,
@@ -55,7 +57,12 @@ pub struct ProxySettings {
 impl Default for ProxySettings {
     fn default() -> Self {
         // Mirrors the common local proxy default (Clash/Mihomo mixed port).
-        Self { enabled: false, protocol: "http".into(), host: "127.0.0.1".into(), port: 7897 }
+        Self {
+            enabled: false,
+            protocol: "http".into(),
+            host: "127.0.0.1".into(),
+            port: 7897,
+        }
     }
 }
 
@@ -65,23 +72,47 @@ impl ProxySettings {
     pub fn proxy_url(&self) -> Result<String, &'static str> {
         let proto = self.protocol.trim().to_lowercase();
         if !ALLOWED_PROTOCOLS.contains(&proto.as_str()) {
-            return Err("invalid protocol (use http / https / socks5)");
+            return Err("invalid protocol (use http / socks5)");
         }
-        let host = self.host.trim();
-        if host.is_empty() {
-            return Err("empty host");
-        }
-        if host.contains("://") || host.contains('@') || host.contains('/') {
-            return Err("host should not contain scheme / path");
-        }
-        if host.len() > 253 {
-            return Err("host too long");
-        }
+        let (_, url_host) = proxy_host_parts(&self.host)?;
         if self.port == 0 {
             return Err("port must be 1-65535");
         }
-        Ok(format!("{proto}://{host}:{port}", port = self.port))
+        Ok(format!("{proto}://{url_host}:{port}", port = self.port))
     }
+}
+
+fn proxy_host_parts(raw_host: &str) -> Result<(String, String), &'static str> {
+    let host = raw_host.trim();
+    if host.is_empty() {
+        return Err("empty host");
+    }
+    if host.contains("://") || host.contains('@') || host.contains('/') {
+        return Err("host should not contain scheme / path");
+    }
+    if host.len() > 253 {
+        return Err("host too long");
+    }
+    if host.starts_with('[') || host.ends_with(']') {
+        if !(host.starts_with('[') && host.ends_with(']')) {
+            return Err("invalid IPv6 host brackets");
+        }
+        let inner = &host[1..host.len() - 1];
+        if inner.parse::<Ipv6Addr>().is_err() {
+            return Err("bracketed host must be an IPv6 address");
+        }
+        return Ok((inner.to_string(), format!("[{inner}]")));
+    }
+    if host.contains('[') || host.contains(']') {
+        return Err("invalid IPv6 host brackets");
+    }
+    if host.contains(':') {
+        if host.parse::<Ipv6Addr>().is_err() {
+            return Err("host should not include a port");
+        }
+        return Ok((host.to_string(), format!("[{host}]")));
+    }
+    Ok((host.to_string(), host.to_string()))
 }
 
 /// Mutate `cmd` so the Codex child inherits the configured proxy (or no proxy +
@@ -103,23 +134,31 @@ pub fn apply_to_subprocess(cmd: &mut tokio::process::Command, cfg: Option<&Proxy
                 tracing::info!(module = "proxy", proxy_url = %url, "proxy injected into codex sidecar env (incl. ALL_PROXY for wss stream)");
             }
             Err(e) => {
-                tracing::warn!(module = "proxy", "proxy enabled but invalid ({e}); stripping all proxy env");
+                tracing::warn!(
+                    module = "proxy",
+                    "proxy enabled but invalid ({e}); stripping all proxy env"
+                );
                 strip_all_proxy_env(cmd);
             }
         },
         _ => {
+            strip_all_proxy_env(cmd);
             cmd.env("NO_PROXY", LOCALHOST_NO_PROXY);
             cmd.env("no_proxy", LOCALHOST_NO_PROXY);
-            cmd.env_remove("ALL_PROXY");
-            cmd.env_remove("all_proxy");
         }
     }
 }
 
 fn strip_all_proxy_env(cmd: &mut tokio::process::Command) {
     for var in [
-        "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy",
-        "NO_PROXY", "no_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
     ] {
         cmd.env_remove(var);
     }
@@ -163,7 +202,7 @@ fn probe_result(
 pub async fn probe_connectivity(protocol: String, host: String, port: u16) -> ProxyProbeResult {
     let protocol = protocol.trim().to_lowercase();
     let host = host.trim().to_string();
-    let proxy_url = format!("{protocol}://{host}:{port}");
+    let fallback_proxy_url = format!("{protocol}://{host}:{port}");
 
     if !matches!(protocol.as_str(), "http" | "socks5") {
         return probe_result(
@@ -173,7 +212,7 @@ pub async fn probe_connectivity(protocol: String, host: String, port: u16) -> Pr
             "Proxy protocol must be http or socks5",
             None,
             None,
-            proxy_url,
+            fallback_proxy_url,
         );
     }
 
@@ -183,17 +222,34 @@ pub async fn probe_connectivity(protocol: String, host: String, port: u16) -> Pr
         host: host.clone(),
         port,
     };
-    if let Err(e) = cfg.proxy_url() {
-        return probe_result(
-            false,
-            "local_proxy",
-            "invalid_proxy",
-            "Proxy host or port is invalid",
-            Some(e.to_string()),
-            None,
-            proxy_url,
-        );
-    }
+    let proxy_url = match cfg.proxy_url() {
+        Ok(url) => url,
+        Err(e) => {
+            return probe_result(
+                false,
+                "local_proxy",
+                "invalid_proxy",
+                "Proxy host or port is invalid",
+                Some(e.to_string()),
+                None,
+                fallback_proxy_url,
+            )
+        }
+    };
+    let (connect_host, _) = match proxy_host_parts(&host) {
+        Ok(parts) => parts,
+        Err(e) => {
+            return probe_result(
+                false,
+                "local_proxy",
+                "invalid_proxy",
+                "Proxy host or port is invalid",
+                Some(e.to_string()),
+                None,
+                proxy_url,
+            )
+        }
+    };
 
     tracing::info!(
         module = "proxy",
@@ -204,7 +260,7 @@ pub async fn probe_connectivity(protocol: String, host: String, port: u16) -> Pr
 
     let stream = match timeout(
         Duration::from_millis(PROBE_CONNECT_TIMEOUT_MS),
-        TcpStream::connect((host.as_str(), port)),
+        TcpStream::connect((connect_host.as_str(), port)),
     )
     .await
     {
@@ -240,8 +296,9 @@ pub async fn probe_connectivity(protocol: String, host: String, port: u16) -> Pr
     }
 }
 
-/// Probe the network path Codex will use right now: direct when proxy is off,
-/// or through the configured proxy when proxy is on.
+/// Run a lightweight connectivity diagnostic: direct when proxy is off, or
+/// through the configured proxy when proxy is on. This does not prove
+/// OpenAI/Codex service reachability.
 pub async fn probe_codex_connectivity(cfg: &ProxySettings) -> ProxyProbeResult {
     if cfg.enabled {
         return probe_connectivity(cfg.protocol.clone(), cfg.host.clone(), cfg.port).await;
@@ -319,6 +376,27 @@ async fn read_probe(stream: &mut TcpStream, buf: &mut [u8]) -> Result<usize, Str
     }
 }
 
+async fn read_http_response_head(stream: &mut TcpStream) -> Result<String, String> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 256];
+
+    loop {
+        let n = read_probe(stream, &mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..n]);
+        if bytes.windows(2).any(|w| w == b"\r\n")
+            || bytes.contains(&b'\n')
+            || bytes.len() >= PROBE_RESPONSE_HEAD_MAX_BYTES
+        {
+            break;
+        }
+    }
+
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 async fn read_exact_probe(stream: &mut TcpStream, buf: &mut [u8]) -> Result<(), String> {
     match timeout(
         Duration::from_millis(PROBE_HANDSHAKE_TIMEOUT_MS),
@@ -354,9 +432,8 @@ async fn send_generate_204_request(
         );
     }
 
-    let mut buf = [0_u8; 1024];
-    let n = match read_probe(&mut stream, &mut buf).await {
-        Ok(0) => {
+    let response = match read_http_response_head(&mut stream).await {
+        Ok(response) if response.is_empty() => {
             return probe_result(
                 false,
                 stage,
@@ -367,7 +444,7 @@ async fn send_generate_204_request(
                 url,
             );
         }
-        Ok(n) => n,
+        Ok(response) => response,
         Err(e) => {
             return probe_result(
                 false,
@@ -385,7 +462,6 @@ async fn send_generate_204_request(
         }
     };
 
-    let response = String::from_utf8_lossy(&buf[..n]);
     let status = parse_http_status(&response);
     let first_line = first_response_line(&response);
 
@@ -569,7 +645,9 @@ async fn probe_socks5_proxy_get(mut stream: TcpStream, proxy_url: &str) -> Proxy
     }
 
     match drain_socks5_bind_addr(&mut stream, head[3]).await {
-        Ok(()) => send_generate_204_request(stream, PROBE_TARGET_PATH, "external_http", proxy_url).await,
+        Ok(()) => {
+            send_generate_204_request(stream, PROBE_TARGET_PATH, "external_http", proxy_url).await
+        }
         Err(e) => probe_result(
             false,
             "external_connect",
@@ -635,30 +713,60 @@ mod tests {
     use super::*;
 
     fn make(enabled: bool, proto: &str, host: &str, port: u16) -> ProxySettings {
-        ProxySettings { enabled, protocol: proto.into(), host: host.into(), port }
+        ProxySettings {
+            enabled,
+            protocol: proto.into(),
+            host: host.into(),
+            port,
+        }
     }
 
     #[test]
     fn url_compose_http() {
-        assert_eq!(make(true, "http", "127.0.0.1", 7890).proxy_url().unwrap(), "http://127.0.0.1:7890");
+        assert_eq!(
+            make(true, "http", "127.0.0.1", 7890).proxy_url().unwrap(),
+            "http://127.0.0.1:7890"
+        );
     }
 
     #[test]
     fn url_compose_socks5() {
         assert_eq!(
-            make(true, "socks5", "proxy.example.com", 1080).proxy_url().unwrap(),
+            make(true, "socks5", "proxy.example.com", 1080)
+                .proxy_url()
+                .unwrap(),
             "socks5://proxy.example.com:1080"
         );
     }
 
     #[test]
+    fn url_brackets_ipv6_hosts() {
+        assert_eq!(
+            make(true, "http", "::1", 7890).proxy_url().unwrap(),
+            "http://[::1]:7890"
+        );
+        assert_eq!(
+            make(true, "http", "[::1]", 7890).proxy_url().unwrap(),
+            "http://[::1]:7890"
+        );
+    }
+
+    #[test]
     fn url_normalizes_protocol_case() {
-        assert_eq!(make(true, "HTTP", "127.0.0.1", 7890).proxy_url().unwrap(), "http://127.0.0.1:7890");
+        assert_eq!(
+            make(true, "HTTP", "127.0.0.1", 7890).proxy_url().unwrap(),
+            "http://127.0.0.1:7890"
+        );
     }
 
     #[test]
     fn url_trims_host_whitespace() {
-        assert_eq!(make(true, "http", "  127.0.0.1  ", 7890).proxy_url().unwrap(), "http://127.0.0.1:7890");
+        assert_eq!(
+            make(true, "http", "  127.0.0.1  ", 7890)
+                .proxy_url()
+                .unwrap(),
+            "http://127.0.0.1:7890"
+        );
     }
 
     #[test]
@@ -669,6 +777,7 @@ mod tests {
     #[test]
     fn url_rejects_unknown_protocol() {
         assert!(make(true, "ftp", "127.0.0.1", 21).proxy_url().is_err());
+        assert!(make(true, "https", "127.0.0.1", 7890).proxy_url().is_err());
     }
 
     #[test]
@@ -678,14 +787,23 @@ mod tests {
 
     #[test]
     fn url_rejects_url_shaped_host() {
-        assert!(make(true, "http", "http://127.0.0.1", 8080).proxy_url().is_err());
+        assert!(make(true, "http", "http://127.0.0.1", 8080)
+            .proxy_url()
+            .is_err());
         assert!(make(true, "http", "user@proxy", 8080).proxy_url().is_err());
         assert!(make(true, "http", "host/path", 8080).proxy_url().is_err());
+        assert!(make(true, "http", "127.0.0.1:8080", 8080)
+            .proxy_url()
+            .is_err());
+        assert!(make(true, "http", "[localhost]", 8080).proxy_url().is_err());
     }
 
     #[test]
     fn http_status_parses_success() {
-        assert_eq!(parse_http_status("HTTP/1.1 204 No Content\r\n\r\n"), Some(204));
+        assert_eq!(
+            parse_http_status("HTTP/1.1 204 No Content\r\n\r\n"),
+            Some(204)
+        );
     }
 
     #[test]

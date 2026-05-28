@@ -1203,7 +1203,7 @@ pub fn cfg_save(config: crate::config::AppConfig) -> Result<(), String> {
     crate::config::save(&config).map_err(e2s)
 }
 
-/// Probe the Settings proxy endpoint before/after applying it to Codex.
+/// Probe the Settings proxy endpoint with a lightweight connectivity check.
 #[tauri::command]
 pub async fn probe_proxy(
     protocol: String,
@@ -1213,8 +1213,9 @@ pub async fn probe_proxy(
     crate::proxy::probe_connectivity(protocol, host, port).await
 }
 
-/// Probe the network path the Codex sidecar will use: direct, or through the
-/// configured proxy when proxy is enabled.
+/// Run the same lightweight connectivity check directly, or through the
+/// configured proxy when proxy is enabled. This is a diagnostic hint, not an
+/// OpenAI/Codex service reachability check.
 #[tauri::command]
 pub async fn probe_codex_network() -> crate::proxy::ProxyProbeResult {
     let cfg = crate::config::load();

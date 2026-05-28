@@ -1462,13 +1462,16 @@ export class CanvasScene {
     window.addEventListener("blur", this.onWindowBlur);
   }
 
-  private editableTarget(target: EventTarget | null): boolean {
-    const el = target as HTMLElement | null;
-    return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  private keyboardTargetConsumesSpace(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+    if (target instanceof HTMLElement && target.isContentEditable) return true;
+    return !!target.closest(
+      "input, textarea, select, button, a[href], [role='button'], [role='switch'], [role='checkbox'], [role='menuitem']",
+    );
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
-    if (e.code !== "Space" || this.editableTarget(e.target)) return;
+    if (e.code !== "Space" || this.keyboardTargetConsumesSpace(e.target)) return;
     if (this.cropActive) return;
     if (document.querySelector(".cm-ctx, .cm-modal-backdrop, .cm-gallery-backdrop, .cm-gdetail-backdrop, .cm-compare")) return;
     e.preventDefault();

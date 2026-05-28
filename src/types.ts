@@ -104,7 +104,7 @@ export interface PlacementUpdate {
 // Mirrors src-tauri/src/proxy.rs ProxySettings + config.rs AppConfig.
 export interface ProxySettings {
   enabled: boolean;
-  protocol: "http" | "https" | "socks5";
+  protocol: "http" | "socks5";
   host: string;
   port: number;
 }
