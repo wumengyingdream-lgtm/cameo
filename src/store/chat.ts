@@ -156,8 +156,6 @@ interface ChatState {
   refreshSessions: () => Promise<void>;
   newSession: () => Promise<void>;
   switchSession: (id: string) => Promise<void>;
-  /** Persist the latest assistant message to the active session (on turn end). */
-  persistAssistant: () => void;
 }
 
 const newId = () => Math.random().toString(36).slice(2, 10);
@@ -246,25 +244,7 @@ function forceRestartSession(
 ): Partial<ChatState> {
   const autoRestart = opts.autoRestart ?? true;
   const boardId = useBoardStore.getState().boardId;
-  const { activeSessionId, messages } = st;
-
-  // Snapshot the failed assistant message NOW (before we mutate state). If
-  // the watchdog fired before ANY runtime event arrived, `blocks` will be
-  // empty — inject a note block so the error bubble has visible content
-  // instead of rendering as an empty red box.
-  let failedAsst: AsstMsg | null = null;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role === "assistant") {
-      const settled = settle(m);
-      const withNote: AsstMsg =
-        settled.blocks.length === 0
-          ? { ...settled, blocks: [{ type: "note", level: "error", text: reason }] }
-          : settled;
-      failedAsst = { ...withNote, status: "error", error: reason };
-      break;
-    }
-  }
+  const { messages } = st;
 
   // C2 fix — capture boardId NOW; the IIFE's async chain may take 100s of ms
   // and the user might switch boards in the meantime. We only restart THIS
@@ -272,22 +252,18 @@ function forceRestartSession(
   const startedOnBoard = boardId;
 
   void (async () => {
-    // 1. Persist the failed message FIRST so the post-restart reload retains
-    //    the explanation rather than dropping a silently-failed turn.
-    if (startedOnBoard && activeSessionId && failedAsst) {
-      await ipc
-        .appendMessage(startedOnBoard, activeSessionId, failedAsst)
-        .catch(() => { /* best effort */ });
-    }
-    // 2. Tree-kill the wedged sidecar so the next startSession spawns fresh.
+    // Tree-kill the wedged sidecar so the next startSession spawns fresh. The
+    // turn's streamed content is persisted authoritatively by Rust when the
+    // process exits (reader-loop EOF flush), so we no longer append from here —
+    // that avoids a duplicate record and keeps Rust the single writer.
     if (startedOnBoard) {
       await ipc.stopSession(startedOnBoard).catch(() => { /* best effort */ });
     }
-    // 3. Bump restartNonce — triggers App.tsx's session-rebuild effect chain.
-    //    Skip if (a) the user has navigated away (different board active) or
-    //    (b) the caller explicitly asked NOT to auto-restart (loop breaker
-    //    tripped). In either case the local state is already idle so the UI
-    //    is usable; just no auto-recovery.
+    // Bump restartNonce — triggers App.tsx's session-rebuild effect chain.
+    // Skip if (a) the user has navigated away (different board active) or
+    // (b) the caller explicitly asked NOT to auto-restart (loop breaker
+    // tripped). In either case the local state is already idle so the UI
+    // is usable; just no auto-recovery.
     if (!autoRestart) return;
     if (useBoardStore.getState().boardId !== startedOnBoard) return;
     useSettingsStore.setState((s) => ({ restartNonce: s.restartNonce + 1 }));
@@ -315,8 +291,6 @@ function failLocalTurn(st: ChatState, reason: string, scope?: TurnScope): Partia
   const currentBoardId = useBoardStore.getState().boardId;
   if (scope?.boardId && currentBoardId !== scope.boardId) return {};
 
-  const boardId = scope?.boardId ?? currentBoardId;
-  const sessionId = scope?.sessionId ?? st.activeSessionId;
   const { messages } = st;
 
   let targetIndex = -1;
@@ -344,9 +318,8 @@ function failLocalTurn(st: ChatState, reason: string, scope?: TurnScope): Partia
 
   if (isLatestAssistant) watchdog.stop();
 
-  if (boardId && sessionId) {
-    void ipc.appendMessage(boardId, sessionId, failedAsst).catch(() => { /* best effort */ });
-  }
+  // No persistence here: a turn that never reached Codex has no authoritative
+  // record to write (Rust owns the timeline). The failure is shown live.
 
   return {
     turnStatus: isLatestAssistant ? "idle" : st.turnStatus,
@@ -480,10 +453,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // gets invalidated — it must NOT fire its tree-kill against THIS new turn.
     stopEpoch++;
     // Persist the user message immediately (crash-safe) + auto-title the session.
+    // Message persistence is now AUTHORITATIVE in Rust (the runtime writes the
+    // user + assistant records to the session timeline, bound to the turn's
+    // session regardless of UI focus — see CODEX_PROTOCOL.md / codex.rs). The
+    // frontend no longer appends; it only auto-titles the session from the first
+    // user message (pure UI metadata).
     const boardId = useBoardStore.getState().boardId;
     const { activeSessionId, sessions } = get();
     if (boardId && activeSessionId) {
-      void ipc.appendMessage(boardId, activeSessionId, userMsg);
       const sess = sessions.find((s) => s.id === activeSessionId);
       if (sess && (!sess.title || sess.title === "New session") && text.trim()) {
         void ipc.renameSession(boardId, activeSessionId, text.trim().slice(0, 24)).then(() => get().refreshSessions());
@@ -772,18 +749,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const messages = (await ipc.loadSession(boardId, id)) as ChatMessage[];
     set({ messages, activeSessionId: id, plan: null });
     await get().refreshSessions();
-  },
-
-  persistAssistant: () => {
-    const boardId = useBoardStore.getState().boardId;
-    const { activeSessionId, messages } = get();
-    if (!boardId || !activeSessionId) return;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") {
-        void ipc.appendMessage(boardId, activeSessionId, messages[i]);
-        break;
-      }
-    }
   },
 
   resolveChatImage: (path: string) => {

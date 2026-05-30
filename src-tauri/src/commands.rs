@@ -1261,19 +1261,6 @@ pub fn load_session(
     Ok(session::load_timeline(&folder, &session_id))
 }
 
-/// Append one message to a session's timeline (frontend calls on send + turn end).
-#[tauri::command]
-pub fn append_message(
-    board_id: String,
-    session_id: String,
-    message: serde_json::Value,
-    registry: State<Arc<BoardRegistry>>,
-) -> Result<(), String> {
-    let folder = registry.folder(&board_id).ok_or("unknown board")?;
-    session::append_message(&folder, &session_id, &message);
-    Ok(())
-}
-
 // ── App config (global ~/.cameo/config.json) + diagnostics ───────────────────
 
 /// Load the global app config (network proxy etc.). Missing/corrupt → defaults.

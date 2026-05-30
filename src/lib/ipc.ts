@@ -105,8 +105,6 @@ export const ipc = {
     invoke<void>("rename_session", { boardId, sessionId, title }),
   loadSession: (boardId: string, sessionId: string) =>
     invoke<unknown[]>("load_session", { boardId, sessionId }),
-  appendMessage: (boardId: string, sessionId: string, message: unknown) =>
-    invoke<void>("append_message", { boardId, sessionId, message }),
   respondPermission: (boardId: string, requestId: number, accept: boolean) =>
     invoke<void>("respond_permission", { boardId, requestId, accept }),
   stopSession: (boardId: string) => invoke<void>("stop_session", { boardId }),

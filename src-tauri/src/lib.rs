@@ -137,7 +137,6 @@ pub fn run() {
             commands::switch_session,
             commands::rename_session,
             commands::load_session,
-            commands::append_message,
         ])
         .build(tauri::generate_context!())
         .expect("error building Cameo");

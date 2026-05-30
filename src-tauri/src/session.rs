@@ -3,8 +3,15 @@
 //! A Board has N sessions (conversations); the canvas (board.json) is shared.
 //! This module is pure file I/O — it owns `.cameo/sessions.json` (the index,
 //! incl. each session's Codex threadId) and `.cameo/sessions/<id>.jsonl`
-//! (opaque message timelines; the frontend owns the message/block shape and
-//! just hands JSON in/out).
+//! (message timelines).
+//!
+//! Timelines hold the frontend's `ChatMessage` JSON shape, but as of v0.1.6 the
+//! **runtime (codex.rs) is the authoritative writer** — it appends the user
+//! record at turn start and the assistant record at turn end, bound to the
+//! turn's session regardless of which Board the UI is focused on. This replaced
+//! a best-effort frontend `appendMessage` that could silently drop a turn's
+//! history when the UI's active-board / turn-state gates didn't line up. The
+//! shape stays frontend-owned so `loadSession` and old timelines need no change.
 
 use crate::paths::{board_session_timeline, board_sessions_doc};
 use serde::{Deserialize, Serialize};
@@ -138,12 +145,16 @@ pub fn append_message(folder: &Path, id: &str, msg: &Value) {
         Ok(l) => l,
         Err(_) => return,
     };
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(board_session_timeline(folder, id))
-    {
-        let _ = writeln!(f, "{line}");
+    let path = board_session_timeline(folder, id);
+    match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(mut f) => {
+            if let Err(e) = writeln!(f, "{line}") {
+                tracing::warn!(module = "session", "append timeline write failed ({}): {e}", path.display());
+            }
+        }
+        // Never silently drop a message — a swallowed failure here is exactly how
+        // a session's history can vanish without a trace (v0.1.6 data-loss fix).
+        Err(e) => tracing::warn!(module = "session", "append timeline open failed ({}): {e}", path.display()),
     }
     let mut doc = load(folder);
     if let Some(s) = doc.sessions.iter_mut().find(|s| s.id == id) {

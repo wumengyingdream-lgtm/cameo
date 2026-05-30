@@ -2883,6 +2883,12 @@ body.cm-chat-resizing {
   opacity: 0.45;
   cursor: default;
 }
+.cm-gen__triggerlabel {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .cm-gen__caret {
   opacity: 0.7;
 }
@@ -2955,12 +2961,17 @@ body.cm-chat-resizing {
   margin: 3px 4px;
   background: var(--cm-divider);
 }
-/* Flyout submenu, opening to the left of the root popover. */
+/* Flyout submenu, opening to the LEFT and anchored to the row's BOTTOM so it
+ * grows upward — the composer sits at the viewport bottom, so a top-anchored
+ * flyout from a low row (速度) would spill off-screen. max-height + scroll keep
+ * long model lists fully reachable. */
 .cm-gen__flyout {
   position: absolute;
   right: calc(100% + 5px);
-  top: 0;
+  bottom: 0;
   min-width: 188px;
+  max-height: 60vh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;

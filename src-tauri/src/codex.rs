@@ -760,6 +760,14 @@ pub struct CodexSessionInner {
     /// so all dispatch paths (composer / preset / context menu) apply them without
     /// each caller having to thread params through. See CODEX_PROTOCOL.md §4.
     gen: PlMutex<crate::model::GenSettings>,
+    /// Assistant chat blocks accumulated during the in-flight turn, in arrival
+    /// order (text segments + generated images). Flushed to the active session's
+    /// timeline at turn end. This makes the message timeline AUTHORITATIVELY
+    /// persisted by the runtime — bound to the turn's session, independent of
+    /// which Board the UI happens to be focused on — instead of relying on a
+    /// best-effort frontend call that the active-board / turn-state gates could
+    /// silently drop (the v0.1.6 data-loss fix).
+    turn_blocks: PlMutex<Vec<Value>>,
 }
 
 pub struct CodexSession {
@@ -1023,6 +1031,7 @@ pub async fn start_session(
         pending_gen: PlMutex::new(HashMap::new()),
         intentional_shutdown: PlMutex::new(false),
         gen: PlMutex::new(gen_from_meta(&storage::load_meta(&folder))),
+        turn_blocks: PlMutex::new(Vec::new()),
     });
 
     tauri::async_runtime::spawn(reader_loop(inner.clone(), stdout));
@@ -1350,6 +1359,57 @@ pub fn set_gen_settings(
     }
 }
 
+// ── Authoritative message-timeline persistence (v0.1.6 data-loss fix) ─────────
+//
+// The runtime — not the frontend — owns writing the session timeline. It is the
+// only component that reliably sees every event for the turn's session
+// regardless of which Board the UI is focused on. Records use the SAME
+// `ChatMessage` JSON the frontend renders, so `loadSession` is unchanged and old
+// timelines stay compatible. Durable content only: user text + assistant text +
+// generated images (thinking / tool steps are live-only process detail).
+
+/// Append the user's message to the active session timeline at turn start.
+fn persist_user_record(inner: &CodexSessionInner, text: &str, refs: &[String]) {
+    let session_id = inner.active_session_id.lock().clone();
+    if session_id.is_empty() {
+        return;
+    }
+    let msg = json!({
+        "id": nanoid::nanoid!(12),
+        "role": "user",
+        "text": text,
+        "refs": refs,
+    });
+    session::append_message(&inner.folder, &session_id, &msg);
+}
+
+/// Flush the accumulated assistant blocks for the just-finished turn. Idempotent
+/// via `std::mem::take` (a later teardown flush after a clean turn/completed is a
+/// no-op); skips turns with no durable content.
+fn flush_turn_timeline(inner: &CodexSessionInner, status: &str, error: Option<&str>) {
+    let blocks: Vec<Value> = {
+        let mut b = inner.turn_blocks.lock();
+        if b.is_empty() {
+            return;
+        }
+        std::mem::take(&mut *b)
+    };
+    let session_id = inner.active_session_id.lock().clone();
+    if session_id.is_empty() {
+        return;
+    }
+    let mut msg = json!({
+        "id": nanoid::nanoid!(12),
+        "role": "assistant",
+        "blocks": blocks,
+        "status": if status == "completed" { "done" } else { "error" },
+    });
+    if let Some(e) = error {
+        msg["error"] = json!(e);
+    }
+    session::append_message(&inner.folder, &session_id, &msg);
+}
+
 fn thread_id_of(res: &Value) -> Option<String> {
     res.get("thread")?.get("id")?.as_str().map(String::from)
 }
@@ -1522,6 +1582,12 @@ pub async fn send_message(
     let prompt = build_turn_prompt(&text, &refs);
     let input = json!([{ "type": "text", "text": prompt, "text_elements": [] }]);
 
+    // Authoritatively persist the user message to the active session timeline at
+    // submit time (covers both a fresh turn and a steered input). `text` is the
+    // original instruction (not the agent-only reference preamble); refs are the
+    // referenced placement ids — same shape the frontend renders.
+    persist_user_record(inner, &text, &source_placement_ids);
+
     let active_turn_id = { inner.current_turn_id.lock().clone() };
     if let Some(turn_id) = active_turn_id {
         let has_pending_steers = { !inner.pending_steers.lock().is_empty() };
@@ -1569,6 +1635,9 @@ pub async fn send_message(
     *inner.current_overlays.lock() = new_overlays;
     *inner.current_sources.lock() = source_placement_ids;
     inner.output_index.store(0, Ordering::SeqCst);
+    // Fresh turn → start a clean assistant-block accumulator (steered inputs keep
+    // appending to the in-flight turn's accumulator instead).
+    inner.turn_blocks.lock().clear();
 
     // Every turn explicitly carries the Board's generation knobs (see
     // CODEX_PROTOCOL.md §4): turn overrides are sticky, so model/effort/serviceTier
@@ -1810,6 +1879,9 @@ async fn reader_loop(inner: Arc<CodexSessionInner>, stdout: ChildStdout) {
         let _ = tx.send(Err("app-server process exited".into()));
     }
     clear_active_turn(&inner);
+    // Process died mid-turn (crash / wedge / kill): flush whatever the assistant
+    // streamed so far so it isn't lost. No-op if turn/completed already flushed.
+    flush_turn_timeline(&inner, "error", Some("Codex process exited"));
     clear_stream_state(&inner);
     cleanup_dispatch_overlays(&inner);
     if !*inner.intentional_shutdown.lock() {
@@ -2097,6 +2169,10 @@ async fn handle_notification(inner: &Arc<CodexSessionInner>, method: &str, param
             // against stale sources (review #3, #6).
             clear_stream_state(inner);
             cleanup_dispatch_overlays(inner);
+            // Persist the assistant message BEFORE signalling completion, so a UI
+            // that reacts to TurnComplete (e.g. switches session → reloads) always
+            // reads a timeline that already includes this turn.
+            flush_turn_timeline(inner, &status, error.as_deref());
             inner.emit(UnifiedEvent::TurnComplete { status, error });
         }
         "thread/tokenUsage/updated" => {
@@ -2243,6 +2319,16 @@ async fn handle_item_completed(inner: &Arc<CodexSessionInner>, item: &Value) {
                 }
             }
             inner.emit(UnifiedEvent::TextStop);
+            // Accumulate the completed text for authoritative timeline persistence
+            // (the full message; prefer the item's final text, fall back to the
+            // streamed deltas). Pushed in arrival order alongside image blocks.
+            let full = if final_text.is_empty() { streamed } else { final_text.to_string() };
+            if !full.is_empty() {
+                inner
+                    .turn_blocks
+                    .lock()
+                    .push(json!({ "type": "text", "text": full }));
+            }
         }
         "reasoning" | "plan" => inner.emit(UnifiedEvent::ThinkingStop),
         // Non-tool items: no chat block (mirror item/started).
@@ -2450,6 +2536,14 @@ async fn on_image_generation(inner: &Arc<CodexSessionInner>, item: &Value) {
         tracing::warn!(module = "codex", "save board after generation failed: {e}");
     }
     drop(save_guard);
+    // Accumulate the generated image as an assistant image block for the turn's
+    // authoritative timeline (matches the frontend's "done" image block shape).
+    inner.turn_blocks.lock().push(json!({
+        "type": "image",
+        "placementId": placement.id,
+        "caption": caption,
+        "status": "done",
+    }));
     inner.emit(UnifiedEvent::ImageGenerated {
         asset,
         placement,
