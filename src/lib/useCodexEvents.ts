@@ -33,14 +33,15 @@ export function useCodexEvents() {
       }
       const wasRunning = useChatStore.getState().turnStatus === "running";
       useChatStore.getState().handleEvent(event);
-      // After the turn settles, persist the assistant message + notify the OS
-      // (only fires if the window is unfocused).
+      // Message persistence is authoritative in Rust (the runtime writes the
+      // timeline at turn end, bound to the turn's session regardless of focus).
+      // Here we only fire the OS notification when a turn finishes.
       if (
         wasRunning &&
-        (event.kind === "turnComplete" || event.kind === "sessionComplete" || event.kind === "error")
+        event.kind === "turnComplete" &&
+        event.status === "completed"
       ) {
-        useChatStore.getState().persistAssistant();
-        if (event.kind === "turnComplete" && event.status === "completed") void notifyTurnDone("生成完成 ✓");
+        void notifyTurnDone("生成完成 ✓");
       }
     }).then((u) => {
       if (cancelled) u();

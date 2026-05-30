@@ -5,7 +5,9 @@ import type {
   CodexInfo,
   Asset,
   BoardInfo,
+  GenSettings,
   ImportResult,
+  ModelInfo,
   Placement,
   PlacementUpdate,
   ProxyProbeResult,
@@ -24,6 +26,16 @@ export interface OverlayRef {
 export const ipc = {
   frontLog: (level: "info" | "warn" | "error", msg: string) =>
     invoke<void>("front_log", { level, msg }),
+
+  /** Proxied transport for the cloud API (gallery + telemetry). Routes through
+   *  Rust's single proxied client so cloud traffic honors Settings → Proxy —
+   *  the WebView's own fetch cannot. See services/cloud/index.ts. */
+  cloudRequest: (req: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    body?: string;
+  }) => invoke<{ status: number; body: string }>("cloud_request", { req }),
 
   initialBoard: () => invoke<string | null>("initial_board"),
 
@@ -88,6 +100,12 @@ export const ipc = {
     invoke<void>("send_message", { boardId, text, sources, overlays }),
   interruptTurn: (boardId: string) => invoke<void>("interrupt_turn", { boardId }),
 
+  // Generation knobs (model / effort / service tier) — per-Board, sticky.
+  getGenSettings: (boardId: string) => invoke<GenSettings>("get_gen_settings", { boardId }),
+  setGenSettings: (boardId: string, settings: GenSettings) =>
+    invoke<void>("set_gen_settings", { boardId, settings }),
+  listModels: (boardId: string) => invoke<ModelInfo[]>("list_models", { boardId }),
+
   // Sessions
   listSessions: (boardId: string) => invoke<SessionsDoc>("list_sessions", { boardId }),
   newSession: (boardId: string) => invoke<string>("new_session", { boardId }),
@@ -97,8 +115,6 @@ export const ipc = {
     invoke<void>("rename_session", { boardId, sessionId, title }),
   loadSession: (boardId: string, sessionId: string) =>
     invoke<unknown[]>("load_session", { boardId, sessionId }),
-  appendMessage: (boardId: string, sessionId: string, message: unknown) =>
-    invoke<void>("append_message", { boardId, sessionId, message }),
   respondPermission: (boardId: string, requestId: number, accept: boolean) =>
     invoke<void>("respond_permission", { boardId, requestId, accept }),
   stopSession: (boardId: string) => invoke<void>("stop_session", { boardId }),

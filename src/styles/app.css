@@ -2852,6 +2852,153 @@ body.cm-chat-resizing {
   background: var(--cm-divider);
 }
 
+/* ──────────── Composer generation picker (model / 智能 / 速度) ──────────── */
+.cm-gen {
+  position: relative;
+  display: inline-flex;
+}
+.cm-gen__trigger {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg-secondary);
+  font: inherit;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 7px;
+  border-radius: var(--cm-radius-md);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  white-space: nowrap;
+}
+.cm-gen__trigger:hover:not(:disabled),
+.cm-gen__trigger[aria-expanded="true"] {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-gen__trigger:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.cm-gen__triggerlabel {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-gen__caret {
+  opacity: 0.7;
+}
+
+/* Popover opens upward (composer sits at the bottom). */
+.cm-gen__menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 2000;
+  min-width: 196px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  box-shadow: var(--cm-shadow-3);
+}
+.cm-gen__header {
+  font-size: 11px;
+  color: var(--cm-fg-secondary);
+  padding: 5px 10px 3px;
+}
+.cm-gen__row {
+  position: relative;
+  display: flex;
+}
+.cm-gen__item {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cm-fg);
+  font: inherit;
+  font-size: 13px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: var(--cm-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cm-gen__item:hover:not(:disabled) {
+  background: var(--cm-gray-100);
+}
+.cm-gen__label {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.cm-gen__value {
+  color: var(--cm-fg-secondary);
+  font-size: 12px;
+}
+.cm-gen__check {
+  color: var(--cm-accent);
+  flex: none;
+}
+.cm-gen__chev {
+  color: var(--cm-fg-secondary);
+  flex: none;
+}
+.cm-gen__sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--cm-divider);
+}
+/* Flyout submenu, opening to the LEFT and anchored to the row's BOTTOM so it
+ * grows upward — the composer sits at the viewport bottom, so a top-anchored
+ * flyout from a low row (速度) would spill off-screen. max-height + scroll keep
+ * long model lists fully reachable. */
+.cm-gen__flyout {
+  position: absolute;
+  right: calc(100% + 5px);
+  bottom: 0;
+  min-width: 188px;
+  max-height: 60vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  box-shadow: var(--cm-shadow-3);
+}
+.cm-gen__item--rich {
+  align-items: flex-start;
+}
+.cm-gen__rich {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cm-gen__desc {
+  font-size: 11px;
+  color: var(--cm-fg-secondary);
+}
+.cm-gen__zap {
+  color: var(--cm-accent);
+  vertical-align: -2px;
+}
+
 /* ───────────────────── Settings — Cloud & Privacy ───────────────────── */
 .cm-set-row--actions {
   justify-content: flex-end;

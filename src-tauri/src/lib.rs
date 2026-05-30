@@ -14,6 +14,7 @@ pub mod device;
 pub mod logging;
 pub mod updater;
 pub mod model;
+pub mod net;
 pub mod paths;
 pub mod process;
 pub mod prompt;
@@ -78,10 +79,13 @@ pub fn run() {
             }
         })
         .register_uri_scheme_protocol("cameo", protocol::handle_cameo_uri)
+        // Proxied remote fetch for gallery images — see protocol::handle_cmnet_uri.
+        .register_asynchronous_uri_scheme_protocol("cmnet", protocol::handle_cmnet_uri)
         .invoke_handler(tauri::generate_handler![
             ping,
             app_version,
             front_log,
+            commands::cloud_request,
             commands::cfg_load,
             commands::cfg_save,
             commands::probe_proxy,
@@ -125,6 +129,9 @@ pub fn run() {
             commands::write_overlay,
             commands::start_session,
             commands::send_message,
+            commands::get_gen_settings,
+            commands::set_gen_settings,
+            commands::list_models,
             commands::interrupt_turn,
             commands::respond_permission,
             commands::codex_auth_status,
@@ -134,7 +141,6 @@ pub fn run() {
             commands::switch_session,
             commands::rename_session,
             commands::load_session,
-            commands::append_message,
         ])
         .build(tauri::generate_context!())
         .expect("error building Cameo");

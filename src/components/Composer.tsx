@@ -8,6 +8,8 @@ import { useComposerStore } from "../store/composer";
 import { cameoUrl, ipc } from "../lib/ipc";
 import { buildOverlays, buildMarkNotes, annotatedImages } from "../lib/overlay";
 import { GalleryButton } from "./gallery/GalleryButton";
+import { GenSettingsMenu } from "./GenSettingsMenu";
+import { useGenStore } from "../store/genSettings";
 
 function stem(path: string): string {
   const base = path.split(/[/\\]/).pop() ?? path;
@@ -259,6 +261,15 @@ export function Composer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Generation knobs: load the Board's saved choice on board change; fetch the
+  // model list once the session is ready (model/list needs a live app-server).
+  useEffect(() => {
+    if (boardId) void useGenStore.getState().load(boardId);
+  }, [boardId]);
+  useEffect(() => {
+    if (boardId && sessionStatus === "ready") void useGenStore.getState().fetchModels(boardId);
+  }, [boardId, sessionStatus]);
+
   // ── dispatch ───────────────────────────────────────────────────────────
   const extract = (): { text: string; refs: string[] } => {
     const editor = editorRef.current;
@@ -425,6 +436,7 @@ export function Composer() {
             <ImagePlus size={17} />
           </button>
           <div className="cm-composer__barspacer" />
+          <GenSettingsMenu />
           {running ? (
             <button className="cm-send cm-send--stop" title={t("composer.stop")} onClick={stop}>
               <Square size={12} fill="currentColor" strokeWidth={0} />

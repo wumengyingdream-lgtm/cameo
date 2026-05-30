@@ -8,7 +8,16 @@ use std::path::{Path, PathBuf};
 
 pub fn load_meta(folder: &Path) -> BoardMeta {
     match std::fs::read(board_meta_path(folder)) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            // Parity with load_board_doc: don't fail silently. A corrupt meta read
+            // as default means the next save (e.g. a gen-settings change) writes
+            // back default board identity — surface it in logs.
+            tracing::warn!(
+                module = "storage",
+                "meta.json parse failed ({e}); using defaults — board identity may reset on next save"
+            );
+            BoardMeta::default()
+        }),
         Err(_) => BoardMeta::default(),
     }
 }

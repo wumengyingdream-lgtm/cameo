@@ -1,6 +1,6 @@
 [package]
 name = "cameo"
-version = "0.1.5"
+version = "0.1.6"
 description = "An image-first canvas for your local Codex agent."
 authors = ["Ethan L <myagents.io@gmail.com>"]
 license = "AGPL-3.0-or-later"
@@ -22,7 +22,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "socks", "stream"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }
