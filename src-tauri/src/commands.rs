@@ -999,13 +999,14 @@ pub async fn send_message(
     text: String,
     sources: Vec<String>,
     overlays: Vec<OverlayRef>,
+    skills: Vec<codex::SkillRef>,
     codex: State<'_, Arc<CodexRegistry>>,
 ) -> Result<(), String> {
     let ov = overlays
         .into_iter()
         .map(|o| (o.placement_id, o.path))
         .collect();
-    codex::send_message(codex.inner().clone(), board_id, text, sources, ov).await
+    codex::send_message(codex.inner().clone(), board_id, text, sources, ov, skills).await
 }
 
 /// Read the Board's saved generation knobs (model/effort/serviceTier). Works
@@ -1040,6 +1041,16 @@ pub async fn list_models(
     codex: State<'_, Arc<CodexRegistry>>,
 ) -> Result<Vec<codex::ModelInfo>, String> {
     codex::list_models(codex.inner().clone(), board_id).await
+}
+
+/// Enumerate enabled Codex skills for the composer slash menu.
+#[tauri::command]
+pub async fn list_skills(
+    board_id: String,
+    force_reload: bool,
+    codex: State<'_, Arc<CodexRegistry>>,
+) -> Result<Vec<codex::SkillInfo>, String> {
+    codex::list_skills(codex.inner().clone(), board_id, force_reload).await
 }
 
 /// Replace the annotation shapes for a Placement (empty clears it). Persisted.

@@ -3,13 +3,37 @@
 User-facing release notes for Cameo. This file describes what changed from a
 user's point of view, rather than listing internal implementation details.
 
+## [0.1.7] - 2026-05-31
+
+### Improvements
+
+- **Codex skills, right from the input box**: type `/` to see the skills enabled
+  in your current folder and run one inline. Cameo sends it to Codex as a proper
+  skill while keeping the slash label visible in your chat history.
+- Cameo now works with **any Codex CLI sign-in** — a ChatGPT subscription, an API
+  key, or another Codex-supported provider — not just a subscription login. As
+  before, Cameo never receives or stores your API key.
+- You can now **check for updates on demand** from Settings, which also shows the
+  version you're running and a link to the full release notes. Updates still
+  download automatically in the background; this just lets you trigger and watch
+  a check yourself.
+- Smaller canvas and composer polish: reference and skill pills are easier to
+  edit, and hovering an image on the canvas gives clearer feedback.
+
+### Fixes
+
+- App updates apply more reliably on Windows.
+
+---
+
 ## [0.1.6] - 2026-05-30
 
 ### Improvements
 
 - A new **Codex setup panel** makes getting started clearer: Cameo tells you
-  whether the Codex CLI is installed and signed in, and gives one-tap guidance
-  (install / `codex login`) with a re-check button when something's missing.
+  whether the Codex CLI is installed and authenticated/configured, and gives
+  one-tap guidance (install / Codex auth setup) with a re-check button when
+  something's missing.
 - You can now choose how Codex generates right from the input box — pick the
   **model**, the **intelligence** (reasoning effort: low / medium / high / extra
   high), and the **speed** (standard or fast), mirroring the official Codex app.
@@ -111,8 +135,8 @@ thread.
 
 - Native app for macOS and Windows, built with a GPU-backed canvas for large
   image boards.
-- Uses your own logged-in Codex CLI and ChatGPT subscription. Cameo does not
-  bundle Codex, sell tokens, or require an API key.
+- Uses your own Codex CLI credentials or provider setup. Cameo does not bundle
+  Codex, sell tokens, or store API keys.
 - Includes workspace restore, multiple sessions per board, timeline persistence,
   streaming Codex responses, clarifying questions, settings, proxy support,
   unified logs, tray behavior, and app update support.

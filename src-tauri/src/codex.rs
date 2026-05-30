@@ -298,7 +298,13 @@ pub struct CodexAuthStatus {
     pub auth_method: Option<String>,
     pub requires_openai_auth: bool,
     pub requires_login: bool,
-    pub auth_supported: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillRef {
+    pub name: String,
+    pub path: String,
 }
 
 pub fn detect() -> CodexInfo {
@@ -338,20 +344,12 @@ fn parse_auth_status(res: &Value) -> CodexAuthStatus {
         .get("requiresOpenaiAuth")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let auth_supported = is_supported_auth_method(auth_method.as_deref());
+    let requires_login = auth_method.is_none() && requires_openai_auth;
     CodexAuthStatus {
-        requires_login: auth_method.is_none() && requires_openai_auth,
-        auth_supported,
+        requires_login,
         auth_method,
         requires_openai_auth,
     }
-}
-
-fn is_supported_auth_method(method: Option<&str>) -> bool {
-    matches!(
-        method,
-        Some("chatgpt" | "chatgptAuthTokens" | "agentIdentity")
-    )
 }
 
 fn is_rpc_response_for(msg: &Value, id: u64) -> bool {
@@ -435,8 +433,8 @@ async fn cleanup_probe_child(child: &mut Child, pid: u32) {
 }
 
 /// Probe local Codex auth without requiring an open Board session. This is used
-/// by the status popover before `thread/start`, so "installed but not logged in"
-/// can be shown as its own product state.
+/// by the status popover before `thread/start`, so missing credentials can be
+/// shown as its own product state.
 pub async fn probe_auth() -> Result<CodexAuthStatus, String> {
     let codex = resolve_codex()?;
     let mut cmd = tokio::process::Command::new(&codex.path);
@@ -668,11 +666,11 @@ pub fn open_login_terminal() -> Result<(), String> {
             r#"#!/bin/zsh
 set +e
 export PATH={search_path}
-echo "Cameo is opening Codex login..."
+echo "Cameo is opening Codex ChatGPT login..."
 echo
 {codex_path} login
 echo
-echo "After login finishes, return to Cameo and click Re-detect."
+echo "After setup finishes, return to Cameo and click Re-detect."
 echo
 echo "Press any key to close this window."
 read -rsn 1
@@ -688,11 +686,11 @@ read -rsn 1
             r#"@echo off
 setlocal
 set "PATH={search_path}"
-echo Cameo is opening Codex login...
+echo Cameo is opening Codex ChatGPT login...
 echo.
 call "{codex_path}" login
 echo.
-echo After login finishes, return to Cameo and click Re-detect.
+echo After setup finishes, return to Cameo and click Re-detect.
 echo.
 pause
 "#
@@ -1066,11 +1064,10 @@ pub async fn start_session(
         Ok(auth) => {
             if auth.requires_login {
                 discard_session(&codex_reg, &board_id, &session).await;
-                return Err("Codex is installed but not logged in. Run `codex login`.".into());
-            }
-            if auth.auth_method.is_some() && !auth.auth_supported {
-                discard_session(&codex_reg, &board_id, &session).await;
-                return Err("Cameo requires Codex signed in with ChatGPT. Run `codex login`.".into());
+                return Err(
+                    "Codex is installed but has no usable credentials. Run `codex login`, `codex login --with-api-key`, or configure a supported provider."
+                        .into(),
+                );
             }
         }
         Err(e) => {
@@ -1247,6 +1244,18 @@ pub struct ModelInfo {
     pub default_service_tier: Option<String>,
 }
 
+/// A Codex skill projected to what the composer slash menu needs.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInfo {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub short_description: Option<String>,
+    pub path: String,
+    pub scope: String,
+}
+
 fn parse_model(m: &Value) -> Option<ModelInfo> {
     let id = m
         .get("id")
@@ -1302,6 +1311,41 @@ fn parse_model(m: &Value) -> Option<ModelInfo> {
     })
 }
 
+fn parse_skill(s: &Value) -> Option<SkillInfo> {
+    if !s.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return None;
+    }
+    let name = s.get("name")?.as_str()?.to_string();
+    let description = s
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let path = s.get("path")?.as_str()?.to_string();
+    let scope = s.get("scope")?.as_str()?.to_string();
+    let interface = s.get("interface");
+    let display_name = interface
+        .and_then(|i| i.get("displayName"))
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or(&name)
+        .to_string();
+    let short_description = interface
+        .and_then(|i| i.get("shortDescription"))
+        .and_then(|v| v.as_str())
+        .or_else(|| s.get("shortDescription").and_then(|v| v.as_str()))
+        .filter(|v| !v.trim().is_empty())
+        .map(String::from);
+    Some(SkillInfo {
+        name,
+        display_name,
+        description,
+        short_description,
+        path,
+        scope,
+    })
+}
+
 /// Enumerate models via `model/list` (paginated). Drives the composer menu.
 pub async fn list_models(
     codex_reg: Arc<CodexRegistry>,
@@ -1331,6 +1375,45 @@ pub async fn list_models(
             // Advance only on a genuinely new cursor; stop on null or non-advancing.
             Some(next) if Some(next) != cursor.as_deref() => cursor = Some(next.to_string()),
             _ => break,
+        }
+    }
+    Ok(out)
+}
+
+/// Enumerate enabled Codex skills visible from this Board's cwd.
+pub async fn list_skills(
+    codex_reg: Arc<CodexRegistry>,
+    board_id: String,
+    force_reload: bool,
+) -> Result<Vec<SkillInfo>, String> {
+    let session = codex_reg.get(&board_id).ok_or("session not started")?;
+    let inner = &session.inner;
+    let cwd = inner.folder.to_string_lossy().to_string();
+    let res = inner
+        .call(
+            "skills/list",
+            json!({ "cwds": [cwd], "forceReload": force_reload }),
+            15_000,
+        )
+        .await?;
+    let mut out = Vec::new();
+    for entry in res.get("data").and_then(|d| d.as_array()).into_iter().flatten() {
+        if let Some(errors) = entry.get("errors").and_then(|v| v.as_array()) {
+            for err in errors {
+                tracing::warn!(
+                    module = "codex",
+                    path = err.get("path").and_then(|v| v.as_str()).unwrap_or_default(),
+                    message = err.get("message").and_then(|v| v.as_str()).unwrap_or_default(),
+                    "skill metadata error"
+                );
+            }
+        }
+        if let Some(skills) = entry.get("skills").and_then(|v| v.as_array()) {
+            for skill in skills {
+                if let Some(info) = parse_skill(skill) {
+                    out.push(info);
+                }
+            }
         }
     }
     Ok(out)
@@ -1381,6 +1464,19 @@ fn persist_user_record(inner: &CodexSessionInner, text: &str, refs: &[String]) {
         "refs": refs,
     });
     session::append_message(&inner.folder, &session_id, &msg);
+}
+
+fn visible_user_text(text: &str, skills: &[SkillRef]) -> String {
+    let skill_label = skills
+        .iter()
+        .map(|skill| format!("/{}", skill.name))
+        .collect::<Vec<_>>()
+        .join(" ");
+    match (skill_label.trim().is_empty(), text.trim().is_empty()) {
+        (true, _) => text.to_string(),
+        (false, true) => skill_label,
+        (false, false) => format!("{skill_label}\n\n{text}"),
+    }
 }
 
 /// Flush the accumulated assistant blocks for the just-finished turn. Idempotent
@@ -1559,6 +1655,7 @@ pub async fn send_message(
     text: String,
     source_placement_ids: Vec<String>,
     overlays: Vec<(String, String)>,
+    skills: Vec<SkillRef>,
 ) -> Result<(), String> {
     let session = codex_reg.get(&board_id).ok_or("session not started")?;
     let inner = &session.inner;
@@ -1580,13 +1677,19 @@ pub async fn send_message(
         }
     };
     let prompt = build_turn_prompt(&text, &refs);
-    let input = json!([{ "type": "text", "text": prompt, "text_elements": [] }]);
+    let mut input_items: Vec<Value> = skills
+        .iter()
+        .map(|skill| json!({ "type": "skill", "name": skill.name, "path": skill.path }))
+        .collect();
+    input_items.push(json!({ "type": "text", "text": prompt, "text_elements": [] }));
+    let input = Value::Array(input_items);
 
     // Authoritatively persist the user message to the active session timeline at
-    // submit time (covers both a fresh turn and a steered input). `text` is the
-    // original instruction (not the agent-only reference preamble); refs are the
-    // referenced placement ids — same shape the frontend renders.
-    persist_user_record(inner, &text, &source_placement_ids);
+    // submit time (covers both a fresh turn and a steered input). The persisted
+    // text is the user-visible form, including selected slash skills; the Codex
+    // prompt stays `text` plus the structured skill inputs above.
+    let timeline_text = visible_user_text(&text, &skills);
+    persist_user_record(inner, &timeline_text, &source_placement_ids);
 
     let active_turn_id = { inner.current_turn_id.lock().clone() };
     if let Some(turn_id) = active_turn_id {
@@ -1749,7 +1852,8 @@ async fn get_auth_status(inner: &Arc<CodexSessionInner>) -> Result<CodexAuthStat
     Ok(parse_auth_status(&res))
 }
 
-/// Probe ChatGPT-subscription auth. Returns (authMethod, requiresLogin).
+/// Probe Codex credentials. Returns auth method plus whether Codex explicitly
+/// needs an OpenAI login.
 pub async fn auth_status(codex_reg: Arc<CodexRegistry>, board_id: String) -> Result<Value, String> {
     let session = codex_reg.get(&board_id).ok_or("no session")?;
     let auth = get_auth_status(&session.inner).await?;
@@ -1757,7 +1861,6 @@ pub async fn auth_status(codex_reg: Arc<CodexRegistry>, board_id: String) -> Res
         "authMethod": auth.auth_method,
         "requiresOpenaiAuth": auth.requires_openai_auth,
         "requiresLogin": auth.requires_login,
-        "authSupported": auth.auth_supported,
     }))
 }
 
@@ -1896,9 +1999,9 @@ async fn reader_loop(inner: Arc<CodexSessionInner>, stdout: ChildStdout) {
 /// surfaced to the UI as a chat note so failures aren't silent (first match
 /// wins). The full line is always written to the unified log regardless.
 const STDERR_SURFACE: &[(&str, &str, &str)] = &[
-    ("401", "warn", "认证失败 (401) — 确认已 codex login"),
+    ("401", "warn", "认证失败 (401) — 确认 Codex 凭据 / provider 配置"),
     ("403", "warn", "无权限 (403)"),
-    ("unauthorized", "warn", "认证失败 — 确认已 codex login"),
+    ("unauthorized", "warn", "认证失败 — 确认 Codex 凭据 / provider 配置"),
     (
         "error sending request",
         "error",
@@ -2608,7 +2711,6 @@ mod tests {
         assert_eq!(auth.auth_method, None);
         assert!(auth.requires_openai_auth);
         assert!(auth.requires_login);
-        assert!(!auth.auth_supported);
     }
 
     #[test]
@@ -2622,11 +2724,10 @@ mod tests {
         assert_eq!(auth.auth_method.as_deref(), Some("chatgpt"));
         assert!(auth.requires_openai_auth);
         assert!(!auth.requires_login);
-        assert!(auth.auth_supported);
     }
 
     #[test]
-    fn auth_status_rejects_api_key_for_cameo() {
+    fn auth_status_accepts_api_key_for_cameo() {
         let auth = parse_auth_status(&json!({
             "authMethod": "apikey",
             "authToken": null,
@@ -2635,7 +2736,19 @@ mod tests {
 
         assert_eq!(auth.auth_method.as_deref(), Some("apikey"));
         assert!(!auth.requires_login);
-        assert!(!auth.auth_supported);
+    }
+
+    #[test]
+    fn auth_status_accepts_provider_that_does_not_require_openai_auth() {
+        let auth = parse_auth_status(&json!({
+            "authMethod": null,
+            "authToken": null,
+            "requiresOpenaiAuth": false,
+        }));
+
+        assert_eq!(auth.auth_method, None);
+        assert!(!auth.requires_openai_auth);
+        assert!(!auth.requires_login);
     }
 
     #[test]

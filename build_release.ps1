@@ -87,18 +87,107 @@ function New-UpdaterZip($installer, $zipPath) {
   Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath "$zipPath.sig" -Force -ErrorAction SilentlyContinue
 
-  Add-Type -AssemblyName System.IO.Compression
-  Add-Type -AssemblyName System.IO.Compression.FileSystem
-  $archive = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
+  # tauri-plugin-updater's zip reader is built without deflate support in our
+  # current dependency graph. .NET's CompressionLevel.NoCompression still writes
+  # method 8 (deflate), so write a single-file ZIP with method 0 by hand.
+  $nameBytes = [System.Text.Encoding]::UTF8.GetBytes($installer.Name)
+  $data = [System.IO.File]::ReadAllBytes($installer.FullName)
+  if ($data.Length -gt [uint32]::MaxValue) { Die "installer too large for non-Zip64 updater zip: $($installer.FullName)" }
+  $size = [uint32]$data.Length
+  $crc = Get-Crc32 $installer.FullName
+  $fs = [System.IO.File]::Open($zipPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+  $writer = [System.IO.BinaryWriter]::new($fs)
   try {
-    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-      $archive,
-      $installer.FullName,
-      $installer.Name,
-      [System.IO.Compression.CompressionLevel]::Optimal
-    ) | Out-Null
+    $localOffset = [uint32]$fs.Position
+    $writer.Write([uint32]0x04034b50)
+    $writer.Write([uint16]20)
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]0)
+    $writer.Write([uint32]$crc)
+    $writer.Write([uint32]$size)
+    $writer.Write([uint32]$size)
+    $writer.Write([uint16]$nameBytes.Length)
+    $writer.Write([uint16]0)
+    $writer.Write($nameBytes)
+    $writer.Write($data)
+
+    $centralOffset = [uint32]$fs.Position
+    $writer.Write([uint32]0x02014b50)
+    $writer.Write([uint16]20)
+    $writer.Write([uint16]20)
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]0)
+    $writer.Write([uint32]$crc)
+    $writer.Write([uint32]$size)
+    $writer.Write([uint32]$size)
+    $writer.Write([uint16]$nameBytes.Length)
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]0)
+    $writer.Write([uint32]0)
+    $writer.Write([uint32]$localOffset)
+    $writer.Write($nameBytes)
+
+    $centralSize = [uint32]($fs.Position - $centralOffset)
+    $writer.Write([uint32]0x06054b50)
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]1)
+    $writer.Write([uint16]1)
+    $writer.Write([uint32]$centralSize)
+    $writer.Write([uint32]$centralOffset)
+    $writer.Write([uint16]0)
   } finally {
-    $archive.Dispose()
+    $writer.Dispose()
+    $fs.Dispose()
+  }
+}
+function Get-Crc32($path) {
+  if (-not ("CameoBuild.Crc32" -as [type])) {
+    Add-Type -TypeDefinition @"
+namespace CameoBuild {
+  public static class Crc32 {
+    static readonly uint[] Table = MakeTable();
+    static uint[] MakeTable() {
+      var table = new uint[256];
+      for (uint i = 0; i < table.Length; i++) {
+        uint c = i;
+        for (int j = 0; j < 8; j++) c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+        table[i] = c;
+      }
+      return table;
+    }
+    public static uint File(string path) {
+      uint crc = 0xffffffffu;
+      var buffer = new byte[65536];
+      using (var stream = System.IO.File.OpenRead(path)) {
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0) {
+          for (int i = 0; i < read; i++) crc = (crc >> 8) ^ Table[(crc ^ buffer[i]) & 0xff];
+        }
+      }
+      return crc ^ 0xffffffffu;
+    }
+  }
+}
+"@
+  }
+  return [CameoBuild.Crc32]::File($path)
+}
+function Assert-UpdaterZipStored($zipPath) {
+  $bytes = [System.IO.File]::ReadAllBytes($zipPath)
+  if ($bytes.Length -lt 30) { Die "updater zip is too small: $zipPath" }
+  if ($bytes[0] -ne 0x50 -or $bytes[1] -ne 0x4b -or $bytes[2] -ne 0x03 -or $bytes[3] -ne 0x04) {
+    Die "updater zip has no local file header: $zipPath"
+  }
+  $method = [BitConverter]::ToUInt16($bytes, 8)
+  if ($method -ne 0) {
+    Die "updater zip must use store/no-compression (method 0), got method $method"
   }
 }
 function Sign-UpdaterPayload($payload) {
@@ -239,6 +328,7 @@ Assert-NameHasVersionToken $installer 'installer' $confVer
 $updaterZipPath = Join-Path $nsisDir "$($installer.BaseName).nsis.zip"
 Info "creating updater payload $(Split-Path $updaterZipPath -Leaf)"
 New-UpdaterZip $installer $updaterZipPath
+Assert-UpdaterZipStored $updaterZipPath
 $updaterZip = Get-Item -LiteralPath $updaterZipPath
 Assert-NameHasVersionToken $updaterZip 'updater payload' $confVer
 Info "signing updater payload"

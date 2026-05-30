@@ -3,6 +3,8 @@ import type {
   AppConfig,
   CodexAuthStatus,
   CodexInfo,
+  CodexSkillInfo,
+  CodexSkillRef,
   Asset,
   BoardInfo,
   GenSettings,
@@ -96,8 +98,14 @@ export const ipc = {
 
   // Codex runtime
   startSession: (boardId: string) => invoke<string>("start_session", { boardId }),
-  sendMessage: (boardId: string, text: string, sources: string[], overlays: OverlayRef[]) =>
-    invoke<void>("send_message", { boardId, text, sources, overlays }),
+  sendMessage: (
+    boardId: string,
+    text: string,
+    sources: string[],
+    overlays: OverlayRef[],
+    skills: CodexSkillRef[] = [],
+  ) =>
+    invoke<void>("send_message", { boardId, text, sources, overlays, skills }),
   interruptTurn: (boardId: string) => invoke<void>("interrupt_turn", { boardId }),
 
   // Generation knobs (model / effort / service tier) — per-Board, sticky.
@@ -105,6 +113,8 @@ export const ipc = {
   setGenSettings: (boardId: string, settings: GenSettings) =>
     invoke<void>("set_gen_settings", { boardId, settings }),
   listModels: (boardId: string) => invoke<ModelInfo[]>("list_models", { boardId }),
+  listSkills: (boardId: string, forceReload = false) =>
+    invoke<CodexSkillInfo[]>("list_skills", { boardId, forceReload }),
 
   // Sessions
   listSessions: (boardId: string) => invoke<SessionsDoc>("list_sessions", { boardId }),
@@ -142,6 +152,19 @@ export const ipc = {
   openCodexLoginTerminal: () => invoke<void>("open_codex_login_terminal"),
   /** Open a directory in the OS file manager. */
   openDir: (path: string) => invoke<void>("open_dir", { path }),
+
+  // ── Auto-updater (manual trigger of the otherwise-silent pipeline) ─────────
+  /** Run the same check+download as the startup path, immediately. Resolves a
+   *  status: "found" (newer version downloading/downloaded), "busy" (a check is
+   *  already running — treat like found), or "uptodate" (nothing newer). Awaits
+   *  the full download; live progress arrives via `updater:*` events. */
+  checkAndDownloadUpdate: () =>
+    invoke<"found" | "busy" | "uptodate">("check_and_download_update"),
+  /** Apply the downloaded update (mac relaunch / win NSIS). Replaces the
+   *  process on success — the returned promise resolves only on failure. */
+  installPendingUpdate: () => invoke<void>("install_pending_update"),
+  /** Windows: a previously-downloaded update on disk, or null. */
+  checkPendingUpdate: () => invoke<string | null>("check_pending_update"),
 
   // ── Chat-text-embedded image references ───────────────────────────────────
   /** Classify a path string the AI emitted in chat text. Returns whether

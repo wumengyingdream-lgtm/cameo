@@ -132,6 +132,7 @@ pub fn run() {
             commands::get_gen_settings,
             commands::set_gen_settings,
             commands::list_models,
+            commands::list_skills,
             commands::interrupt_turn,
             commands::respond_permission,
             commands::codex_auth_status,

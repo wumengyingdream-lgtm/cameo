@@ -190,6 +190,7 @@ export class CanvasScene {
   private annotations = new Map<string, Shape[]>();
   private nodes = new Map<string, Node>();
   private selected = new Set<string>();
+  private hoveredId: string | null = null;
   private tool: Tool = "select";
 
   // Interaction state.
@@ -378,6 +379,7 @@ export class CanvasScene {
         this.destroyNode(node);
         this.nodes.delete(id);
         this.selected.delete(id);
+        if (this.hoveredId === id) this.hoveredId = null;
       }
     }
     // Create / update.
@@ -388,6 +390,7 @@ export class CanvasScene {
           // Asset swapped (e.g. crop bake / undo) — rebuild to load the new texture.
           this.destroyNode(existing);
           this.nodes.delete(p.id);
+          if (this.hoveredId === p.id) this.hoveredId = null;
           this.createNode(p);
         } else {
           this.applyTransform(existing, p);
@@ -811,10 +814,12 @@ export class CanvasScene {
     container.addChild(outline);
 
     const node: Node = { container, placeholder, outline, anno, noteLayer, content: null, assetId: p.assetId, w, h };
+    container.on("pointerover", () => this.setHoveredNode(p.id));
+    container.on("pointerout", () => this.setHoveredNode(null));
     container.on("pointerdown", (e: FederatedPointerEvent) => this.onNodePointerDown(p.id, e));
 
     this.applyTransform(node, p);
-    this.drawOutline(node, false);
+    this.drawOutline(node, false, this.hoveredId === p.id);
     this.placementLayer.addChild(container);
     this.nodes.set(p.id, node);
 
@@ -834,7 +839,7 @@ export class CanvasScene {
           // Correct dims to the true texture size.
           node.w = tex.width;
           node.h = tex.height;
-          this.drawOutline(node, this.selected.has(p.id));
+          this.redrawNodeOutline(p.id);
           this.drawAnnotation(p.id, node, this.annotations.get(p.id) ?? []);
         })
         .catch((err) => {
@@ -849,6 +854,20 @@ export class CanvasScene {
     node.container.destroy({ children: true });
   }
 
+  private setHoveredNode(id: string | null): void {
+    if (this.hoveredId === id) return;
+    const prev = this.hoveredId;
+    this.hoveredId = id;
+    if (prev) this.redrawNodeOutline(prev);
+    if (id) this.redrawNodeOutline(id);
+  }
+
+  private redrawNodeOutline(id: string): void {
+    const node = this.nodes.get(id);
+    if (!node) return;
+    this.drawOutline(node, !this.cropActive && this.selected.has(id), this.hoveredId === id);
+  }
+
   private applyTransform(node: Node, p: Placement): void {
     node.container.position.set(p.x, p.y);
     node.container.scale.set(p.scale);
@@ -856,22 +875,22 @@ export class CanvasScene {
     node.container.zIndex = p.z;
   }
 
-  private drawOutline(node: Node, selected: boolean): void {
+  private drawOutline(node: Node, selected: boolean, hovered: boolean): void {
     const g = node.outline;
     g.clear();
     const x = -node.w / 2;
     const y = -node.h / 2;
     const w = node.w;
     const h = node.h;
+    const b = Math.min(6, Math.max(1.5, Math.max(node.w, node.h) * 0.0022));
     if (selected) {
-      // A thin crisp brand-red edge tight on the image, with a small soft glow
-      // bleeding OUTWARD onto the canvas. alignment:0 = stroke band sits outside
-      // the rect (PixiJS v8); the wide glow is drawn first, the crisp line on top
-      // so the line hugs the edge and the glow shows beyond it. Width is
-      // proportional to the image but small and capped so big images stay thin.
-      const b = Math.min(6, Math.max(1.5, Math.max(node.w, node.h) * 0.0022));
-      g.rect(x, y, w, h).stroke({ width: b * 3.5, color: ACCENT, alpha: 0.15, alignment: 0 });
+      // Selection uses a crisp brand edge plus a same-width soft outer band.
+      // Keep the feedback tight; a broad glow makes large images look selected
+      // even when the pointer only hovers near the edge.
+      g.rect(x, y, w, h).stroke({ width: b * 2, color: ACCENT, alpha: 0.12, alignment: 0 });
       g.rect(x, y, w, h).stroke({ width: b, color: ACCENT, alpha: 1, alignment: 0 });
+    } else if (hovered) {
+      g.rect(x, y, w, h).stroke({ width: b, color: ACCENT, alpha: 0.36, alignment: 0 });
     } else {
       // Subtle dark hairline so light/white images separate from the light canvas.
       g.rect(x, y, w, h).stroke({
@@ -884,8 +903,8 @@ export class CanvasScene {
   }
 
   private refreshOutlines(): void {
-    for (const [id, node] of this.nodes) {
-      this.drawOutline(node, !this.cropActive && this.selected.has(id));
+    for (const id of this.nodes.keys()) {
+      this.redrawNodeOutline(id);
     }
   }
 
