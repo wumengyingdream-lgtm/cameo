@@ -45,6 +45,17 @@ function Assert-NameHasVersionToken($artifact, $label, $version) {
     Die "$label version mismatch: expected file name to include $version, got $($artifact.Name)"
   }
 }
+function Assert-UpdaterZipStored($zipPath) {
+  $bytes = [System.IO.File]::ReadAllBytes($zipPath)
+  if ($bytes.Length -lt 30) { Die "updater zip is too small: $zipPath" }
+  if ($bytes[0] -ne 0x50 -or $bytes[1] -ne 0x4b -or $bytes[2] -ne 0x03 -or $bytes[3] -ne 0x04) {
+    Die "updater zip has no local file header: $zipPath"
+  }
+  $method = [BitConverter]::ToUInt16($bytes, 8)
+  if ($method -ne 0) {
+    Die "updater zip must use store/no-compression (method 0), got method $method. Re-run .\build_release.ps1 before publishing."
+  }
+}
 function Format-Size($path) {
   $bytes = (Get-Item -LiteralPath $path).Length
   if ($bytes -ge 1GB) { return "{0:N1} GB" -f ($bytes / 1GB) }
@@ -225,6 +236,7 @@ $exe = Get-ChildItem -Path $nsisDir -Filter '*-setup.exe' -ErrorAction SilentlyC
 
 if (-not $zip) { Die "no current-version .nsis.zip updater payload in $nsisDir" }
 Assert-NameHasVersionToken $zip 'updater payload' $Version
+Assert-UpdaterZipStored $zip.FullName
 $sig = Ensure-Sig $zip.FullName
 if (-not $sig) { Die "updater signature missing: $($zip.FullName).sig" }
 $zipName = $zip.Name

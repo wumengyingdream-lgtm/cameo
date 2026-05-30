@@ -17,11 +17,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { ipc } from "../lib/ipc";
 
 export function useUpdater() {
   const [pendingVersion, setPendingVersion] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [preparing, setPreparing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,6 +33,7 @@ export function useUpdater() {
     void listen<string>("updater:ready-to-restart", (event) => {
       if (cancelled) return;
       setPreparing(false);
+      setError(null);
       setPendingVersion(event.payload || null);
     }).then((un) => unsubs.push(un));
 
@@ -39,6 +42,7 @@ export function useUpdater() {
     void listen<string>("updater:download-started", () => {
       if (cancelled) return;
       setPreparing(true);
+      setError(null);
     }).then((un) => unsubs.push(un));
 
     // Live event: download failed. We don't surface anything to the user
@@ -47,6 +51,14 @@ export function useUpdater() {
     void listen<string>("updater:download-failed", () => {
       if (cancelled) return;
       setPreparing(false);
+    }).then((un) => unsubs.push(un));
+
+    void listen<string>("updater:install-failed", (event) => {
+      if (cancelled) return;
+      setInstalling(false);
+      setPreparing(false);
+      setError(event.payload || "install failed");
+      void ipc.frontLog("warn", `update install failed: ${event.payload || "unknown"}`).catch(() => {});
     }).then((un) => unsubs.push(un));
 
     // Windows only: bytes on disk from a previous session — reveal the button
@@ -74,11 +86,11 @@ export function useUpdater() {
       // we won't reach this code on the new process.
     } catch (e) {
       setInstalling(false);
-      // Logged on the Rust side; surfacing a toast here would contradict the
-      // "silent updates" product stance. The button will simply re-enable.
-      void console.warn("install_pending_update failed:", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      void ipc.frontLog("warn", `install_pending_update failed: ${msg}`).catch(() => {});
     }
   }, [installing, pendingVersion]);
 
-  return { pendingVersion: preparing ? null : pendingVersion, installing, restart };
+  return { pendingVersion: preparing ? null : pendingVersion, installing, error, restart };
 }

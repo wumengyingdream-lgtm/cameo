@@ -105,6 +105,46 @@ fn read_pending_meta() -> Option<PendingMeta> {
 }
 
 #[cfg(target_os = "windows")]
+fn pending_zip_compression_method() -> Result<Option<u16>, String> {
+    let bytes = std::fs::read(pending_bin_path()).map_err(|e| e.to_string())?;
+    if bytes.len() < 10 {
+        return Err("pending update payload is too small".into());
+    }
+    if bytes.get(0..4) != Some(&[0x50, 0x4b, 0x03, 0x04]) {
+        return Ok(None);
+    }
+    Ok(Some(u16::from_le_bytes([bytes[8], bytes[9]])))
+}
+
+#[cfg(target_os = "windows")]
+fn clear_unsupported_pending_zip(app: &AppHandle, context: &str) -> bool {
+    match pending_zip_compression_method() {
+        Ok(Some(0)) | Ok(None) => false,
+        Ok(Some(method)) => {
+            tracing::warn!(
+                module = "updater",
+                method,
+                context,
+                "pending windows updater zip uses unsupported compression; clearing"
+            );
+            clear_pending_update();
+            let _ = app.emit("updater:install-failed", "BAD_UPDATE_PAYLOAD");
+            true
+        }
+        Err(e) => {
+            tracing::warn!(
+                module = "updater",
+                context,
+                "pending windows update payload is unreadable: {e}"
+            );
+            clear_pending_update();
+            let _ = app.emit("updater:install-failed", "BAD_UPDATE_PAYLOAD");
+            true
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 #[derive(Serialize, Deserialize)]
 struct PendingMeta {
     version: String,
@@ -355,6 +395,9 @@ pub fn check_pending_update(app: AppHandle) -> Option<String> {
         };
         let current = app.package_info().version.to_string();
         if version_gt(&meta.version, &current) {
+            if clear_unsupported_pending_zip(&app, "startup") {
+                return None;
+            }
             tracing::info!(module = "updater", version = %meta.version, "found pending update on disk");
             let app_for_warmup = app.clone();
             tauri::async_runtime::spawn(async move {
@@ -415,6 +458,9 @@ pub async fn install_pending_update(
     if !bin.exists() || !meta.exists() {
         return Err("no pending update on disk".into());
     }
+    if clear_unsupported_pending_zip(&app, "install") {
+        return Err("BAD_UPDATE_PAYLOAD".into());
+    }
     let bytes = std::fs::read(&bin).map_err(|e| e.to_string())?;
     let meta_bytes = std::fs::read(&meta).map_err(|e| e.to_string())?;
     let meta: PendingMeta = serde_json::from_slice(&meta_bytes).map_err(|e| e.to_string())?;
@@ -458,6 +504,7 @@ pub async fn install_pending_update(
                 || last_err == "server reports no update available"
             {
                 clear_pending_update();
+                let _ = app.emit("updater:install-failed", "VERSION_MISMATCH");
                 return Err("VERSION_MISMATCH".into());
             }
             got.ok_or_else(|| {
@@ -481,6 +528,10 @@ pub async fn install_pending_update(
     // Hand off to NSIS. install() spawns the installer and calls exit(0).
     update.install(bytes).map_err(|e| {
         tracing::warn!(module = "updater", "windows install failed: {e}");
+        if e.to_string().contains("Compression method not supported") {
+            clear_pending_update();
+        }
+        let _ = app.emit("updater:install-failed", &e.to_string());
         e.to_string()
     })?;
 

@@ -1,4 +1,4 @@
-import { RotateCw, Loader2 } from "lucide-react";
+import { RotateCw, Loader2, TriangleAlert } from "lucide-react";
 import { useT } from "../i18n/locale";
 import { useUpdater } from "../hooks/useUpdater";
 
@@ -13,24 +13,26 @@ import { useUpdater } from "../hooks/useUpdater";
  */
 export function UpdateIndicator() {
   const t = useT();
-  const { pendingVersion, installing, restart } = useUpdater();
+  const { pendingVersion, installing, error, restart } = useUpdater();
 
   if (!pendingVersion) return null;
 
   return (
     <button
       type="button"
-      className="cm-update-btn"
-      title={t("update.tooltip", { version: pendingVersion })}
+      className={`cm-update-btn${error ? " is-error" : ""}`}
+      title={error ? t("update.errorTooltip", { error }) : t("update.tooltip", { version: pendingVersion })}
       onClick={() => void restart()}
       disabled={installing}
     >
       {installing ? (
         <Loader2 size={13} className="cm-update-btn__spin" />
+      ) : error ? (
+        <TriangleAlert size={13} />
       ) : (
         <RotateCw size={13} />
       )}
-      <span>{t("update.button")}</span>
+      <span>{error ? t("update.retryButton") : t("update.button")}</span>
     </button>
   );
 }

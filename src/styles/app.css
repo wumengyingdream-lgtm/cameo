@@ -225,7 +225,7 @@ body,
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
   cursor: pointer;
   transition: background 0.12s ease, transform 0.12s ease;
 }
@@ -239,6 +239,12 @@ body,
 .cm-update-btn:disabled {
   opacity: 0.7;
   cursor: default;
+}
+.cm-update-btn.is-error {
+  background: var(--cm-danger);
+}
+.cm-update-btn.is-error:hover:not(:disabled) {
+  background: var(--cm-danger-strong);
 }
 .cm-update-btn__spin {
   animation: cm-spin 0.9s linear infinite;

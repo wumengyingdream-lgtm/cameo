@@ -227,7 +227,9 @@ export const en = {
 
   // Auto-updater (silent-download model — button appears only when ready).
   "update.button": "Restart to Update",
+  "update.retryButton": "Update failed · Retry",
   "update.tooltip": "Cameo {version} is ready — click to install",
+  "update.errorTooltip": "Update install failed: {error}",
 } as const;
 
 export type MsgKey = keyof typeof en;
@@ -439,7 +441,9 @@ export const zh: Record<MsgKey, string> = {
   "gallery.error.generic": "Gallery 暂时不可用。",
 
   "update.button": "重启更新",
+  "update.retryButton": "更新失败 · 重试",
   "update.tooltip": "Cameo {version} 已准备就绪 — 点击安装",
+  "update.errorTooltip": "更新安装失败：{error}",
 };
 
 export const messages = { en, zh };
