@@ -1318,6 +1318,7 @@ body.cm-chat-resizing {
 
 /* Input box: text area on top, function row (add image + send) below. */
 .cm-composer__box {
+  position: relative;
   display: flex;
   flex-direction: column;
   background: var(--cm-gray-50);
@@ -1378,7 +1379,7 @@ body.cm-chat-resizing {
   white-space: pre-wrap;
   word-break: break-word;
 }
-.cm-rich:empty::before {
+.cm-rich[data-empty="true"]::before {
   content: attr(data-placeholder);
   color: var(--cm-subtle);
   pointer-events: none;
@@ -1434,25 +1435,23 @@ body.cm-chat-resizing {
   opacity: 0.9;
 }
 .cm-pill--skill {
-  position: relative;
-  padding-left: 8px;
+  padding: 2px 8px 2px 6px;
   background: var(--cm-gray-900);
   color: var(--cm-surface);
 }
-.cm-pill--skill::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  border: 1.5px solid currentColor;
-  border-radius: 2px;
-  opacity: 0.9;
+.cm-pill__icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  display: block;
+  color: currentColor;
 }
 
 .cm-skill-menu {
   position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
   z-index: var(--cm-z-menu);
   max-height: min(46vh, 360px);
   overflow-y: auto;
