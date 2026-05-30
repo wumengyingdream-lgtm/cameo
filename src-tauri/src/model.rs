@@ -151,6 +151,27 @@ pub struct BoardMeta {
     pub active_session_id: Option<String>,
     /// Legacy v0.0.1 single-session thread; migrated into sessions on open.
     pub thread_id: Option<String>,
+    /// Per-Board generation knobs (v0.1.6). All additive `Option` → old metas
+    /// load as `None` and fall back to product defaults at dispatch time.
+    /// `None` model/effort → defaults (gpt-5.5 / medium); `None` service tier →
+    /// standard (sent as explicit JSON null, which Codex treats as "clear").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gen_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gen_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gen_service_tier: Option<String>,
+}
+
+/// The user's generation knobs for a Board, crossing the IPC boundary and held
+/// on the live Codex session. `service_tier == None` means the standard tier
+/// (dispatched as explicit JSON `null`, see CODEX_PROTOCOL.md §4).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenSettings {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub service_tier: Option<String>,
 }
 
 /// Returned to the frontend when a Board is opened.

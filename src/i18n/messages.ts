@@ -123,6 +123,17 @@ export const en = {
   "composer.send": "Send",
   "composer.stop": "Stop",
   "composer.imagePill": "image",
+  // Generation settings menu (model / effort / speed)
+  "composer.gen.menu": "Generation settings",
+  "composer.gen.intelligence": "Intelligence",
+  "composer.gen.model": "Model",
+  "composer.gen.speed": "Speed",
+  "composer.gen.effort.low": "Low",
+  "composer.gen.effort.medium": "Medium",
+  "composer.gen.effort.high": "High",
+  "composer.gen.effort.xhigh": "Extra high",
+  "composer.gen.speed.standard": "Standard",
+  "composer.gen.speed.standardDesc": "Default speed",
 
   // Selection bar + image actions (also used by the canvas context menu)
   "img.removeBg": "Remove bg",
@@ -331,6 +342,17 @@ export const zh: Record<MsgKey, string> = {
   "composer.send": "发送",
   "composer.stop": "停止",
   "composer.imagePill": "图片",
+  // 生成设置菜单（模型 / 智能 / 速度）
+  "composer.gen.menu": "生成设置",
+  "composer.gen.intelligence": "智能",
+  "composer.gen.model": "模型",
+  "composer.gen.speed": "速度",
+  "composer.gen.effort.low": "低",
+  "composer.gen.effort.medium": "中",
+  "composer.gen.effort.high": "高",
+  "composer.gen.effort.xhigh": "超高",
+  "composer.gen.speed.standard": "标准",
+  "composer.gen.speed.standardDesc": "默认速度",
 
   "img.removeBg": "去背景",
   "img.removeBgTitle": "让 Codex 去掉背景",

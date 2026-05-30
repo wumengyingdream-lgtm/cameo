@@ -5,7 +5,9 @@ import type {
   CodexInfo,
   Asset,
   BoardInfo,
+  GenSettings,
   ImportResult,
+  ModelInfo,
   Placement,
   PlacementUpdate,
   ProxyProbeResult,
@@ -87,6 +89,12 @@ export const ipc = {
   sendMessage: (boardId: string, text: string, sources: string[], overlays: OverlayRef[]) =>
     invoke<void>("send_message", { boardId, text, sources, overlays }),
   interruptTurn: (boardId: string) => invoke<void>("interrupt_turn", { boardId }),
+
+  // Generation knobs (model / effort / service tier) — per-Board, sticky.
+  getGenSettings: (boardId: string) => invoke<GenSettings>("get_gen_settings", { boardId }),
+  setGenSettings: (boardId: string, settings: GenSettings) =>
+    invoke<void>("set_gen_settings", { boardId, settings }),
+  listModels: (boardId: string) => invoke<ModelInfo[]>("list_models", { boardId }),
 
   // Sessions
   listSessions: (boardId: string) => invoke<SessionsDoc>("list_sessions", { boardId }),

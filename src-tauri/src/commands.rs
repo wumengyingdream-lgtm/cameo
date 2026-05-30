@@ -1008,6 +1008,40 @@ pub async fn send_message(
     codex::send_message(codex.inner().clone(), board_id, text, sources, ov).await
 }
 
+/// Read the Board's saved generation knobs (model/effort/serviceTier). Works
+/// without a live Codex session (reads meta.json).
+#[tauri::command]
+pub fn get_gen_settings(
+    board_id: String,
+    registry: State<'_, Arc<BoardRegistry>>,
+) -> Result<crate::model::GenSettings, String> {
+    let folder = registry.folder(&board_id).ok_or("unknown board")?;
+    Ok(codex::get_gen_settings(&folder))
+}
+
+/// Persist the Board's generation knobs and push them onto the live session (if
+/// any). `serviceTier == null` means the standard tier.
+#[tauri::command]
+pub fn set_gen_settings(
+    board_id: String,
+    settings: crate::model::GenSettings,
+    registry: State<'_, Arc<BoardRegistry>>,
+    codex: State<'_, Arc<CodexRegistry>>,
+) -> Result<(), String> {
+    let folder = registry.folder(&board_id).ok_or("unknown board")?;
+    codex::set_gen_settings(codex.inner(), &folder, &board_id, settings);
+    Ok(())
+}
+
+/// Enumerate selectable models for the composer menu (via Codex `model/list`).
+#[tauri::command]
+pub async fn list_models(
+    board_id: String,
+    codex: State<'_, Arc<CodexRegistry>>,
+) -> Result<Vec<codex::ModelInfo>, String> {
+    codex::list_models(codex.inner().clone(), board_id).await
+}
+
 /// Replace the annotation shapes for a Placement (empty clears it). Persisted.
 #[tauri::command]
 pub fn set_annotation(

@@ -194,3 +194,30 @@ export interface CodexEventEnvelope {
   boardId: string;
   event: CodexEvent;
 }
+
+/** Per-Board generation knobs. `null` = product default (model/effort) or the
+ *  standard tier (serviceTier). Mirrors Rust `GenSettings`. */
+export interface GenSettings {
+  model: string | null;
+  effort: string | null;
+  serviceTier: string | null;
+}
+
+/** A service (speed) tier offered by a model, e.g. `{ id: "priority", name:
+ *  "Fast", description: "1.5x speed, increased usage" }`. */
+export interface ServiceTierInfo {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/** A model from Codex `model/list`, projected for the composer menu. Field
+ *  names mirror the wire `Model` (camelCase). */
+export interface ModelInfo {
+  id: string;
+  displayName: string;
+  defaultReasoningEffort: string | null;
+  supportedEfforts: string[];
+  serviceTiers: ServiceTierInfo[];
+  defaultServiceTier: string | null;
+}

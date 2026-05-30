@@ -755,6 +755,11 @@ pub struct CodexSessionInner {
     /// Set before intentional teardown paths so the reader EOF doesn't emit a
     /// stale SessionComplete into a board that is already restarting/switching.
     intentional_shutdown: PlMutex<bool>,
+    /// Per-Board generation knobs (model/effort/serviceTier). Seeded from meta at
+    /// session start, updated by `set_gen_settings`, and read on EVERY `turn/start`
+    /// so all dispatch paths (composer / preset / context menu) apply them without
+    /// each caller having to thread params through. See CODEX_PROTOCOL.md §4.
+    gen: PlMutex<crate::model::GenSettings>,
 }
 
 pub struct CodexSession {
@@ -1017,6 +1022,7 @@ pub async fn start_session(
         agent_accum: PlMutex::new(HashMap::new()),
         pending_gen: PlMutex::new(HashMap::new()),
         intentional_shutdown: PlMutex::new(false),
+        gen: PlMutex::new(gen_from_meta(&storage::load_meta(&folder))),
     });
 
     tauri::async_runtime::spawn(reader_loop(inner.clone(), stdout));
@@ -1194,6 +1200,154 @@ fn new_thread_params(folder: &Path, approval: &str, sandbox: &str, dev: &str) ->
         "developerInstructions": dev,
         "ephemeral": false,
     })
+}
+
+/// Product defaults for generation knobs when the Board has no saved choice.
+/// `serviceTier` has no default constant — `None` is sent as JSON null (standard).
+pub const DEFAULT_GEN_MODEL: &str = "gpt-5.5";
+pub const DEFAULT_GEN_EFFORT: &str = "medium";
+
+fn gen_from_meta(m: &crate::model::BoardMeta) -> crate::model::GenSettings {
+    crate::model::GenSettings {
+        model: m.gen_model.clone(),
+        effort: m.gen_effort.clone(),
+        service_tier: m.gen_service_tier.clone(),
+    }
+}
+
+/// A model from `model/list`, projected to what the composer menu needs. Field
+/// names mirror the wire `Model` (camelCase), NOT `~/.codex/models_cache.json`'s
+/// snake_case — see CODEX_PROTOCOL.md §6.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceTierInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+    /// Identifier to pass back as `turn/start.model` (wire `id`, fallback `model`).
+    pub id: String,
+    pub display_name: String,
+    pub default_reasoning_effort: Option<String>,
+    pub supported_efforts: Vec<String>,
+    pub service_tiers: Vec<ServiceTierInfo>,
+    pub default_service_tier: Option<String>,
+}
+
+fn parse_model(m: &Value) -> Option<ModelInfo> {
+    let id = m
+        .get("id")
+        .and_then(|v| v.as_str())
+        .or_else(|| m.get("model").and_then(|v| v.as_str()))?
+        .to_string();
+    let display_name = m
+        .get("displayName")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&id)
+        .to_string();
+    let supported_efforts = m
+        .get("supportedReasoningEfforts")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|o| o.get("reasoningEffort").and_then(|v| v.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let service_tiers = m
+        .get("serviceTiers")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|o| {
+                    Some(ServiceTierInfo {
+                        id: o.get("id").and_then(|v| v.as_str())?.to_string(),
+                        name: o.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                        description: o
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(ModelInfo {
+        id,
+        display_name,
+        default_reasoning_effort: m
+            .get("defaultReasoningEffort")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        supported_efforts,
+        service_tiers,
+        default_service_tier: m
+            .get("defaultServiceTier")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+    })
+}
+
+/// Enumerate models via `model/list` (paginated). Drives the composer menu.
+pub async fn list_models(
+    codex_reg: Arc<CodexRegistry>,
+    board_id: String,
+) -> Result<Vec<ModelInfo>, String> {
+    let session = codex_reg.get(&board_id).ok_or("session not started")?;
+    let inner = &session.inner;
+    let mut out = Vec::new();
+    let mut cursor: Option<String> = None;
+    // Page cap guards a malformed server whose `nextCursor` never advances
+    // (would otherwise loop forever). Always read `nextCursor` BEFORE deciding to
+    // stop, so an empty-but-paginated page doesn't truncate the list.
+    for _ in 0..20 {
+        let params = match &cursor {
+            Some(c) => json!({ "includeHidden": false, "cursor": c }),
+            None => json!({ "includeHidden": false }),
+        };
+        let res = inner.call("model/list", params, 15_000).await?;
+        if let Some(arr) = res.get("data").and_then(|d| d.as_array()) {
+            for m in arr {
+                if let Some(info) = parse_model(m) {
+                    out.push(info);
+                }
+            }
+        }
+        match res.get("nextCursor").and_then(|c| c.as_str()) {
+            // Advance only on a genuinely new cursor; stop on null or non-advancing.
+            Some(next) if Some(next) != cursor.as_deref() => cursor = Some(next.to_string()),
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
+/// Read the Board's saved generation knobs (no live session needed).
+pub fn get_gen_settings(folder: &Path) -> crate::model::GenSettings {
+    gen_from_meta(&storage::load_meta(folder))
+}
+
+/// Persist the Board's generation knobs to meta.json AND update the live session
+/// (if any) so the next `turn/start` uses them. `service_tier == None` = standard.
+pub fn set_gen_settings(
+    codex_reg: &Arc<CodexRegistry>,
+    folder: &Path,
+    board_id: &str,
+    settings: crate::model::GenSettings,
+) {
+    let mut meta = storage::load_meta(folder);
+    meta.gen_model = settings.model.clone();
+    meta.gen_effort = settings.effort.clone();
+    meta.gen_service_tier = settings.service_tier.clone();
+    storage::save_meta(folder, &meta);
+    if let Some(session) = codex_reg.get(board_id) {
+        *session.inner.gen.lock() = settings;
+    }
 }
 
 fn thread_id_of(res: &Value) -> Option<String> {
@@ -1416,10 +1570,28 @@ pub async fn send_message(
     *inner.current_sources.lock() = source_placement_ids;
     inner.output_index.store(0, Ordering::SeqCst);
 
+    // Every turn explicitly carries the Board's generation knobs (see
+    // CODEX_PROTOCOL.md §4): turn overrides are sticky, so model/effort/serviceTier
+    // are sent each turn to keep the thread matching the user's selection.
+    // serviceTier is sent as explicit null when standard (clears any prior fast
+    // override); summary/personality are fixed product defaults.
+    let gen = inner.gen.lock().clone();
+    let model = gen.model.unwrap_or_else(|| DEFAULT_GEN_MODEL.to_string());
+    let effort = gen.effort.unwrap_or_else(|| DEFAULT_GEN_EFFORT.to_string());
+    let service_tier = gen.service_tier; // None → JSON null → standard tier
+
     let res = match inner
         .call(
             "turn/start",
-            json!({ "threadId": thread_id, "input": input, "summary": "concise" }),
+            json!({
+                "threadId": thread_id,
+                "input": input,
+                "summary": "auto",
+                "personality": "friendly",
+                "model": model,
+                "effort": effort,
+                "serviceTier": service_tier,
+            }),
             15_000,
         )
         .await

@@ -30,9 +30,13 @@
 1. **本文件** —— 现状 + 决策 + 工作纪律。
 2. [`specs/ARCHITECTURE.md`](./specs/ARCHITECTURE.md) —— **系统架构真相源**：模块边界、IPC、
    Codex 运行时、存储布局、构建 + 发布。日常迭代以这份为准。
-3. [`specs/DESIGN.md`](./specs/DESIGN.md) —— **视觉真相源**：design token / 字体 / 组件状态
+3. [`specs/CODEX_PROTOCOL.md`](./specs/CODEX_PROTOCOL.md) —— **Codex 协议真相源**：app-server
+   JSON-RPC 方法、生成档位参数语义（model/effort/serviceTier/summary/personality 的 sticky +
+   null 清除）、model/list 字段（wire camelCase vs cache snake_case）、事件流、图像 I/O。动
+   runtime / 加 Codex 参数前必读，别凭记忆。
+4. [`specs/DESIGN.md`](./specs/DESIGN.md) —— **视觉真相源**：design token / 字体 / 组件状态
    矩阵 / 画布交互色。新组件请遵守。
-4. [`README.md`](./README.md) —— 给开源仓库访问者的入口（quick start、平台、FAQ）。
+5. [`README.md`](./README.md) —— 给开源仓库访问者的入口（quick start、平台、FAQ）。
 
 > 本地 maintainer 文档（**已 gitignore，开源仓库里不存在**）：`specs/prd/`（早期 PRD、决策
 > 日志）、`specs/research/`（调研笔记 + Codex runtime file:line 索引）。clone 出去的仓库读
@@ -40,6 +44,8 @@
 >
 > **冲突优先级**：本 CLAUDE.md > ARCHITECTURE.md（实现细节） > DESIGN.md（视觉）。三份之间
 > 真有冲突要么 ARCHITECTURE / DESIGN 该更新了，要么本文档该更新了 —— 不要硬编码 fallback。
+> Codex 协议层面的事实（方法名 / 参数语义 / 枚举）以 CODEX_PROTOCOL.md 为准，且最终真相是本机
+> `codex app-server generate-json-schema` 生成的 schema —— 与之冲突说明文档过期，重生成核对。
 
 ---
 
