@@ -143,6 +143,20 @@ export interface CodexAuthStatus {
   requiresLogin: boolean;
 }
 
+export interface CodexSkillInfo {
+  name: string;
+  displayName: string;
+  description: string;
+  shortDescription?: string | null;
+  path: string;
+  scope: "repo" | "user" | "system" | "admin" | string;
+}
+
+export interface CodexSkillRef {
+  name: string;
+  path: string;
+}
+
 // Mirrors src-tauri/src/runtime.rs UnifiedEvent (tag "kind", camelCase fields).
 export type CodexEvent =
   | { kind: "sessionInit"; threadId: string; model: string }

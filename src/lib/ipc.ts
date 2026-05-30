@@ -3,6 +3,8 @@ import type {
   AppConfig,
   CodexAuthStatus,
   CodexInfo,
+  CodexSkillInfo,
+  CodexSkillRef,
   Asset,
   BoardInfo,
   GenSettings,
@@ -96,8 +98,14 @@ export const ipc = {
 
   // Codex runtime
   startSession: (boardId: string) => invoke<string>("start_session", { boardId }),
-  sendMessage: (boardId: string, text: string, sources: string[], overlays: OverlayRef[]) =>
-    invoke<void>("send_message", { boardId, text, sources, overlays }),
+  sendMessage: (
+    boardId: string,
+    text: string,
+    sources: string[],
+    overlays: OverlayRef[],
+    skills: CodexSkillRef[] = [],
+  ) =>
+    invoke<void>("send_message", { boardId, text, sources, overlays, skills }),
   interruptTurn: (boardId: string) => invoke<void>("interrupt_turn", { boardId }),
 
   // Generation knobs (model / effort / service tier) — per-Board, sticky.
@@ -105,6 +113,8 @@ export const ipc = {
   setGenSettings: (boardId: string, settings: GenSettings) =>
     invoke<void>("set_gen_settings", { boardId, settings }),
   listModels: (boardId: string) => invoke<ModelInfo[]>("list_models", { boardId }),
+  listSkills: (boardId: string, forceReload = false) =>
+    invoke<CodexSkillInfo[]>("list_skills", { boardId, forceReload }),
 
   // Sessions
   listSessions: (boardId: string) => invoke<SessionsDoc>("list_sessions", { boardId }),

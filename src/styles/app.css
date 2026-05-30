@@ -1308,6 +1308,7 @@ body.cm-chat-resizing {
 
 /* ── Composer ───────────────────────────────────────────────────────────── */
 .cm-composer {
+  position: relative;
   border-top: 1px solid var(--cm-divider);
   padding: 10px;
   display: flex;
@@ -1431,6 +1432,105 @@ body.cm-chat-resizing {
   color: var(--cm-accent-text);
   border: 1px dashed var(--cm-brand-200);
   opacity: 0.9;
+}
+.cm-pill--skill {
+  position: relative;
+  padding-left: 8px;
+  background: var(--cm-gray-900);
+  color: var(--cm-surface);
+}
+.cm-pill--skill::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.9;
+}
+
+.cm-skill-menu {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: calc(100% + 8px);
+  z-index: var(--cm-z-menu);
+  max-height: min(46vh, 360px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--cm-surface) 94%, transparent);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  box-shadow: var(--cm-shadow-3);
+  backdrop-filter: blur(18px);
+}
+.cm-skill-menu__item {
+  appearance: none;
+  border: none;
+  width: 100%;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: var(--cm-radius-md);
+  background: transparent;
+  color: var(--cm-fg-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cm-skill-menu__item:hover,
+.cm-skill-menu__item.is-active {
+  background: var(--cm-gray-100);
+  color: var(--cm-fg);
+}
+.cm-skill-menu__icon {
+  color: currentColor;
+}
+.cm-skill-menu__main {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.cm-skill-menu__name {
+  flex: none;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 560;
+  color: var(--cm-fg);
+}
+.cm-skill-menu__desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--cm-fg-secondary);
+}
+.cm-skill-menu__scope {
+  flex: none;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--cm-fg-secondary);
+}
+.cm-skill-menu__state {
+  padding: 12px 13px;
+  color: var(--cm-fg-secondary);
+  font-size: 13px;
+}
+.cm-skill-menu__state--error {
+  color: var(--cm-danger);
 }
 
 .cm-send {

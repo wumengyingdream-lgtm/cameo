@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { ImagePlus, ArrowUp, Square } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ImagePlus, ArrowUp, Square, Package } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useT } from "../i18n/locale";
 import { useBoardStore } from "../store/board";
@@ -10,6 +10,7 @@ import { buildOverlays, buildMarkNotes, annotatedImages } from "../lib/overlay";
 import { GalleryButton } from "./gallery/GalleryButton";
 import { GenSettingsMenu } from "./GenSettingsMenu";
 import { useGenStore } from "../store/genSettings";
+import type { CodexSkillInfo, CodexSkillRef } from "../types";
 
 function stem(path: string): string {
   const base = path.split(/[/\\]/).pop() ?? path;
@@ -18,9 +19,45 @@ function stem(path: string): string {
 }
 
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff", "avif"];
+const SKILL_MENU_LIMIT = 9;
+const CAMEO_SKILL_ALLOWLIST = new Set(["imagegen"]);
 
 function sendErrorMessage(e: unknown): string {
   return `Could not send this turn: ${e instanceof Error ? e.message : String(e)}`;
+}
+
+function skillDescription(skill: CodexSkillInfo): string {
+  return skill.shortDescription || skill.description;
+}
+
+function scopeRank(scope: string): number {
+  if (scope === "repo") return 0;
+  if (scope === "user") return 1;
+  if (scope === "system") return 2;
+  return 3;
+}
+
+function skillMatches(skill: CodexSkillInfo, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return [skill.name, skill.displayName, skillDescription(skill)]
+    .some((value) => value.toLowerCase().includes(q));
+}
+
+function sortSkills(skills: CodexSkillInfo[], query: string): CodexSkillInfo[] {
+  const q = query.trim().toLowerCase();
+  return [...skills].sort((a, b) => {
+    const rank = (s: CodexSkillInfo) => {
+      const name = s.name.toLowerCase();
+      const display = s.displayName.toLowerCase();
+      if (q && (name.startsWith(q) || display.startsWith(q))) return -2;
+      if (CAMEO_SKILL_ALLOWLIST.has(s.name)) return -1;
+      return scopeRank(s.scope);
+    };
+    const byRank = rank(a) - rank(b);
+    if (byRank !== 0) return byRank;
+    return a.displayName.localeCompare(b.displayName);
+  });
 }
 
 /**
@@ -37,14 +74,23 @@ function sendErrorMessage(e: unknown): string {
  * ordered reference placement ids (resolved to file paths by Rust, decision D4).
  */
 export function Composer() {
+  const composerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const lastRange = useRef<Range | null>(null);
+  const skillsRequestRef = useRef<{ boardId: string; seq: number } | null>(null);
+  const skillRequestSeqRef = useRef(0);
   const syncing = useRef(false);
 
   const sessionStatus = useChatStore((s) => s.sessionStatus);
   const turnStatus = useChatStore((s) => s.turnStatus);
   const boardId = useBoardStore((s) => s.boardId);
   const [hasContent, setHasContent] = useState(false);
+  const [skills, setSkills] = useState<CodexSkillInfo[]>([]);
+  const [skillsLoadedFor, setSkillsLoadedFor] = useState<string | null>(null);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsError, setSkillsError] = useState<string | null>(null);
+  const [skillMenu, setSkillMenu] = useState({ open: false, query: "", selected: 0 });
+  const slashRangeRef = useRef<Range | null>(null);
   const t = useT();
 
   const ready = !!boardId && sessionStatus === "ready";
@@ -78,6 +124,19 @@ export function Composer() {
     return span;
   };
 
+  const makeSkillPill = (skill: CodexSkillInfo): HTMLSpanElement => {
+    const span = document.createElement("span");
+    span.className = "cm-pill cm-pill--skill";
+    span.contentEditable = "false";
+    span.dataset.skillName = skill.name;
+    span.dataset.skillPath = skill.path;
+    const label = document.createElement("span");
+    label.className = "cm-pill__label";
+    label.textContent = skill.displayName || skill.name;
+    span.appendChild(label);
+    return span;
+  };
+
   // ── caret / ghost management ─────────────────────────────────────────────
   const anchorRange = (editor: HTMLElement): Range => {
     const r = lastRange.current;
@@ -91,6 +150,68 @@ export function Composer() {
   const refreshHasContent = () => {
     const editor = editorRef.current;
     setHasContent(!!editor && (!!editor.textContent?.trim() || !!editor.querySelector(".cm-pill")));
+  };
+
+  const ensureSkills = (forceReload = false) => {
+    if (!boardId || sessionStatus !== "ready") return;
+    if (!forceReload && skillsLoadedFor === boardId) return;
+    if (!forceReload && skillsRequestRef.current?.boardId === boardId) return;
+    const requestBoardId = boardId;
+    const seq = ++skillRequestSeqRef.current;
+    skillsRequestRef.current = { boardId: requestBoardId, seq };
+    setSkillsLoading(true);
+    setSkillsError(null);
+    void ipc
+      .listSkills(requestBoardId, forceReload)
+      .then((list) => {
+        if (skillsRequestRef.current?.seq !== seq || useBoardStore.getState().boardId !== requestBoardId) return;
+        setSkills(list);
+        setSkillsLoadedFor(requestBoardId);
+      })
+      .catch((e) => {
+        if (skillsRequestRef.current?.seq !== seq || useBoardStore.getState().boardId !== requestBoardId) return;
+        setSkillsError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (skillsRequestRef.current?.seq !== seq) return;
+        skillsRequestRef.current = null;
+        setSkillsLoading(false);
+      });
+  };
+
+  const detectSlashRange = (): { query: string; range: Range } | null => {
+    const editor = editorRef.current;
+    const sel = window.getSelection();
+    if (!editor || !sel || sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed || !editor.contains(range.startContainer)) return null;
+    if (range.startContainer.nodeType !== Node.TEXT_NODE) return null;
+    const node = range.startContainer;
+    const text = node.nodeValue ?? "";
+    const before = text.slice(0, range.startOffset);
+    const match = /(?:^|\s)\/([^\s/]*)$/.exec(before);
+    if (!match) return null;
+    const slashIndex = before.lastIndexOf("/");
+    if (slashIndex < 0) return null;
+    const replace = range.cloneRange();
+    replace.setStart(node, slashIndex);
+    return { query: match[1], range: replace };
+  };
+
+  const refreshSkillMenu = () => {
+    const next = detectSlashRange();
+    if (!next) {
+      slashRangeRef.current = null;
+      setSkillMenu((s) => (s.open ? { open: false, query: "", selected: 0 } : s));
+      return;
+    }
+    slashRangeRef.current = next.range;
+    ensureSkills(false);
+    setSkillMenu((s) => ({
+      open: true,
+      query: next.query,
+      selected: s.query === next.query ? s.selected : 0,
+    }));
   };
 
   /** Move the visible caret to `range` (collapsed). */
@@ -185,6 +306,26 @@ export function Composer() {
     refreshHasContent();
   };
 
+  const insertSkill = (skill: CodexSkillInfo) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const range = slashRangeRef.current?.cloneRange() ?? anchorRange(editor);
+    range.deleteContents();
+    const pill = makeSkillPill(skill);
+    range.insertNode(pill);
+    range.setStartAfter(pill);
+    const trailingSpace = document.createTextNode(" ");
+    range.insertNode(trailingSpace);
+    range.setStartAfter(trailingSpace);
+    range.collapse(true);
+    lastRange.current = range.cloneRange();
+    setCaret(range.cloneRange());
+    slashRangeRef.current = null;
+    setSkillMenu({ open: false, query: "", selected: 0 });
+    refreshHasContent();
+  };
+
   /** Add-image button: pick image file(s) → add to canvas + pill them. */
   const addImages = async () => {
     const sel = await open({
@@ -208,6 +349,8 @@ export function Composer() {
    *     pills (which only come from clicking the canvas, never from paste).
    *     So plain-text is the right whitelist. */
   const onPaste = (e: React.ClipboardEvent) => {
+    slashRangeRef.current = null;
+    setSkillMenu({ open: false, query: "", selected: 0 });
     const cd = e.clipboardData;
     if (!cd) return;
 
@@ -269,19 +412,61 @@ export function Composer() {
   useEffect(() => {
     if (boardId && sessionStatus === "ready") void useGenStore.getState().fetchModels(boardId);
   }, [boardId, sessionStatus]);
+  useEffect(() => {
+    setSkillMenu({ open: false, query: "", selected: 0 });
+    slashRangeRef.current = null;
+    skillsRequestRef.current = null;
+    setSkills([]);
+    setSkillsLoadedFor(null);
+    setSkillsLoading(false);
+    setSkillsError(null);
+  }, [boardId]);
+
+  useEffect(() => {
+    if (!skillMenu.open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const root = composerRef.current;
+      if (root && e.target instanceof Node && root.contains(e.target)) return;
+      slashRangeRef.current = null;
+      setSkillMenu({ open: false, query: "", selected: 0 });
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => window.removeEventListener("pointerdown", onPointerDown, true);
+  }, [skillMenu.open]);
+
+  const skillResults = useMemo(() => {
+    const q = skillMenu.query.trim();
+    const visible = q
+      ? skills.filter((skill) => skillMatches(skill, q))
+      : skills.filter((skill) => skill.scope === "repo" || CAMEO_SKILL_ALLOWLIST.has(skill.name));
+    return sortSkills(visible, q).slice(0, SKILL_MENU_LIMIT);
+  }, [skillMenu.query, skills]);
+
+  useEffect(() => {
+    if (!skillMenu.open || skillResults.length === 0) return;
+    if (skillMenu.selected >= skillResults.length) {
+      setSkillMenu((s) => ({ ...s, selected: skillResults.length - 1 }));
+    }
+  }, [skillMenu.open, skillMenu.selected, skillResults.length]);
 
   // ── dispatch ───────────────────────────────────────────────────────────
-  const extract = (): { text: string; refs: string[] } => {
+  const extract = (): { text: string; refs: string[]; skills: CodexSkillRef[] } => {
     const editor = editorRef.current;
-    if (!editor) return { text: "", refs: [] };
+    if (!editor) return { text: "", refs: [], skills: [] };
     let text = "";
     const refs: string[] = [];
+    const selectedSkills: CodexSkillRef[] = [];
     editor.childNodes.forEach((node) => {
       if (node.nodeType === Node.TEXT_NODE) {
         text += node.nodeValue ?? "";
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         const el = node as HTMLElement;
-        if (el.classList.contains("cm-pill")) {
+        if (el.classList.contains("cm-pill--skill")) {
+          const name = el.dataset.skillName;
+          const path = el.dataset.skillPath;
+          if (name && path) selectedSkills.push({ name, path });
+          text += " ";
+        } else if (el.classList.contains("cm-pill")) {
           const pid = el.dataset.pid;
           if (pid) {
             refs.push(pid);
@@ -295,32 +480,36 @@ export function Composer() {
         }
       }
     });
-    return { text: text.replace(/[ \t]+/g, " ").trim(), refs };
+    return { text: text.replace(/[ \t]+/g, " ").trim(), refs, skills: selectedSkills };
   };
 
   const clearEditor = () => {
     if (editorRef.current) editorRef.current.innerHTML = "";
     lastRange.current = null;
+    slashRangeRef.current = null;
+    setSkillMenu({ open: false, query: "", selected: 0 });
     refreshHasContent();
   };
 
   const dispatch = () => {
     if (!ready || !boardId) return;
     commitGhosts();
-    const { text, refs } = extract();
+    const { text, refs, skills: selectedSkills } = extract();
     // Any image carrying marks is auto-referenced this turn (marks → context).
     const annotated = annotatedImages();
     const allRefs = [...refs, ...annotated.filter((id) => !refs.includes(id))];
     // Mark notes go at the START of the message (formatted), then the free text.
     const notes = buildMarkNotes(allRefs);
     const instruction = [notes, text].filter((s) => s.trim()).join("\n\n");
-    if (!instruction.trim() && allRefs.length === 0) return;
-    const turn = useChatStore.getState().startTurn(instruction, allRefs);
+    if (!instruction.trim() && allRefs.length === 0 && selectedSkills.length === 0) return;
+    const skillLabel = selectedSkills.map((skill) => `/${skill.name}`).join(" ");
+    const visibleInstruction = [skillLabel, instruction].filter((s) => s.trim()).join("\n\n");
+    const turn = useChatStore.getState().startTurn(visibleInstruction, allRefs);
     clearEditor();
     void (async () => {
       try {
         const overlays = await buildOverlays(boardId, allRefs);
-        await ipc.sendMessage(boardId, instruction, allRefs, overlays);
+        await ipc.sendMessage(boardId, instruction, allRefs, overlays, selectedSkills);
         // Consume marks only after the turn was actually sent (not on failure).
         useBoardStore.getState().consumeMarks(allRefs);
       } catch (e) {
@@ -346,6 +535,14 @@ export function Composer() {
     : sessionStatus === "starting"
       ? t("composer.starting")
       : t("composer.notReady");
+
+  const skillScopeLabel = (scope: string) => {
+    if (scope === "repo") return t("composer.skills.scope.repo");
+    if (scope === "user") return t("composer.skills.scope.user");
+    if (scope === "system") return t("composer.skills.scope.system");
+    if (scope === "admin") return t("composer.skills.scope.admin");
+    return scope;
+  };
 
   // External → Composer one-shot injections (Gallery prompt OR chat
   // inline-image pill). Watching `nonce` (not the payloads themselves) makes
@@ -403,8 +600,43 @@ export function Composer() {
   }, [pendingNonce]);
 
   return (
-    <div className="cm-composer">
+    <div ref={composerRef} className="cm-composer">
       <GalleryButton />
+      {skillMenu.open && (
+        <div className="cm-skill-menu" role="listbox" aria-label={t("composer.skills.menu")}>
+          {skillsLoading && skillResults.length === 0 ? (
+            <div className="cm-skill-menu__state">{t("composer.skills.loading")}</div>
+          ) : skillsError ? (
+            <div className="cm-skill-menu__state cm-skill-menu__state--error">
+              {t("composer.skills.error")}
+            </div>
+          ) : skillResults.length === 0 ? (
+            <div className="cm-skill-menu__state">{t("composer.skills.empty")}</div>
+          ) : (
+            skillResults.map((skill, idx) => (
+              <button
+                key={`${skill.name}:${skill.path}`}
+                type="button"
+                className={`cm-skill-menu__item${idx === skillMenu.selected ? " is-active" : ""}`}
+                role="option"
+                aria-selected={idx === skillMenu.selected}
+                onMouseEnter={() => setSkillMenu((s) => ({ ...s, selected: idx }))}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insertSkill(skill);
+                }}
+              >
+                <Package size={15} className="cm-skill-menu__icon" />
+                <span className="cm-skill-menu__main">
+                  <span className="cm-skill-menu__name">{skill.displayName || skill.name}</span>
+                  <span className="cm-skill-menu__desc">{skillDescription(skill)}</span>
+                </span>
+                <span className="cm-skill-menu__scope">{skillScopeLabel(skill.scope)}</span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
       <div className="cm-composer__box">
         <div
           ref={editorRef}
@@ -416,9 +648,46 @@ export function Composer() {
           suppressContentEditableWarning
           onMouseDown={onEditorMouseDown}
           onFocus={commitGhosts}
-          onInput={refreshHasContent}
+          onInput={() => {
+            refreshHasContent();
+            refreshSkillMenu();
+          }}
           onPaste={onPaste}
           onKeyDown={(e) => {
+            if (skillMenu.open) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setSkillMenu((s) => ({
+                  ...s,
+                  selected: skillResults.length ? (s.selected + 1) % skillResults.length : 0,
+                }));
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setSkillMenu((s) => ({
+                  ...s,
+                  selected: skillResults.length
+                    ? (s.selected - 1 + skillResults.length) % skillResults.length
+                    : 0,
+                }));
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                slashRangeRef.current = null;
+                setSkillMenu({ open: false, query: "", selected: 0 });
+                return;
+              }
+              if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                const skill = skillResults[skillMenu.selected];
+                if (skill) {
+                  insertSkill(skill);
+                }
+                return;
+              }
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               dispatch();
