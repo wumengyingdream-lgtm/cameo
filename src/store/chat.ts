@@ -3,6 +3,8 @@ import type { CodexEvent, SessionMeta } from "../types";
 import { ipc, type ChatImageResolution } from "../lib/ipc";
 import { useBoardStore } from "./board";
 import { useSettingsStore } from "./settings";
+import { useGenStore } from "./genSettings";
+import { beginTurn, endTurn, noteImage, noteUsage } from "../services/cloud/turnMetrics";
 import { InactivityWatchdog } from "../lib/watchdog";
 
 // ── runtime stability ───────────────────────────────────────────────────────
@@ -449,6 +451,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // event will touch() it; absent any event for WATCHDOG_TIMEOUT_MS we'll
     // force-restart the session (see forceRestartSession + watchdog.onFire).
     watchdog.start();
+    // Begin per-turn telemetry (Tier-1 ai_turn_complete). startTurn is the single
+    // send funnel (composer + presets both pass here), so every query is measured.
+    // model/effort/tier come from the per-Board gen settings sent with this turn.
+    const gen = useGenStore.getState();
+    beginTurn({ model: gen.model, effort: gen.effort, serviceTier: gen.serviceTier, hasRefs: refs.length > 0 });
     // Bump stopEpoch so any in-flight escalation timer from a prior Stop click
     // gets invalidated — it must NOT fire its tree-kill against THIS new turn.
     stopEpoch++;
@@ -513,6 +520,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // their own case body. New event kinds added in the future must opt in
     // here AND, if terminal, call `watchdog.stop()` in the case body.
     if (PROGRESS_EVENT_KINDS.has(e.kind)) watchdog.touch();
+    // Per-turn telemetry taps (side effects, kept out of the pure set() updater).
+    // endTurn is idempotent, so a turnComplete followed by a stray error won't
+    // double-count. See services/cloud/turnMetrics.ts.
+    if (e.kind === "imageGenerated") noteImage();
+    else if (e.kind === "usage") noteUsage(e.inputTokens, e.outputTokens);
+    else if (e.kind === "turnComplete") endTurn(e.status, e.error);
+    else if (e.kind === "error") endTurn("error", e.message);
     set((st) => {
       switch (e.kind) {
         case "sessionInit":

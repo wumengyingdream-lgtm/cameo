@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { ipc } from "../lib/ipc";
+import { track } from "../services/cloud/telemetry";
 import { useHistoryStore } from "./history";
 import { useUiStore } from "./ui";
 import { useToastStore } from "./toast";
@@ -201,6 +202,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       set((s) => mergeImport(s, result));
       pushImportUndo(boardId, result.placements, set);
       maybeInstallFfmpegFor(result.assets);
+      if (result.placements.length) void track("image_imported", { source: "file", count: result.placements.length });
       return result.placements;
     } catch (e) {
       set({ error: String(e) });
@@ -216,6 +218,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       set((s) => mergeImport(s, result));
       pushImportUndo(boardId, result.placements, set);
       maybeInstallFfmpegFor(result.assets);
+      if (result.placements.length) void track("image_imported", { source: "file", count: result.placements.length });
       const updates = result.placements.map((p) => ({
         id: p.id,
         x: p.x,
@@ -239,6 +242,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const result = await ipc.importImageBytes(boardId, Array.from(bytes), ext, stem);
       set((s) => mergeImport(s, result));
       pushImportUndo(boardId, result.placements, set);
+      if (result.placements.length) void track("image_imported", { source: "paste", count: result.placements.length });
       return result.placements;
     } catch (e) {
       set({ error: String(e) });
@@ -253,6 +257,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const result = centerImport(get(), await ipc.importImageBytes(boardId, Array.from(bytes), ext, stem), center);
       set((s) => mergeImport(s, result));
       pushImportUndo(boardId, result.placements, set);
+      if (result.placements.length) void track("image_imported", { source: "paste", count: result.placements.length });
       const updates = result.placements.map((p) => ({
         id: p.id,
         x: p.x,

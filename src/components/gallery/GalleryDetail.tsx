@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useT } from "../../i18n/locale";
 import type { GalleryItem } from "../../services/cloud/gallery";
 import { proxiedImg } from "../../services/cloud";
+import { track } from "../../services/cloud/telemetry";
 import { useComposerStore } from "../../store/composer";
 
 interface Props {
@@ -33,6 +34,7 @@ export function GalleryDetail({ item, onClose, onUsePrompt }: Props) {
   }, [onClose]);
 
   const usePrompt = () => {
+    void track("gallery_prompt_used", { use_case: item.uc });
     useComposerStore.getState().injectPrompt(item.prompt);
     onUsePrompt();
   };
