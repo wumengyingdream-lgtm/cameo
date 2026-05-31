@@ -154,9 +154,14 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
 **资源 + 协议**
 | 文件 | 行数 | 职责 |
 |---|---:|---|
-| `assets.rs` | 184 | Asset 内容寻址（blake3）+ 缩略图生成（image crate → JPEG）|
-| `protocol.rs` | 248 | 两个 URI scheme：`cameo://`（本地 Board 图片，路由到磁盘 + 防穿越）和 `cmnet://`（**代理远程图片** —— 经 `net.rs` 拉取，SSRF 白名单只允许 public https）。均兼容 Windows WebView2 `http://<scheme>.localhost/...` 形态 |
-| `paths.rs` | 100 | 文件系统布局：全局 `~/.cameo/` + 每 Board `.cameo/`，`CAMEO_HOME` 可覆盖（测试/便携）|
+| `assets.rs` | — | **Asset 铸造的唯一漏斗**（`mint_asset`）：内容寻址（blake3）+ 缩略图。视频走分叉——`ffprobe` 取 时长/fps/尺寸/音轨、`ffmpeg` 抽首帧 poster 到 `.cameo/posters/`；ffmpeg 缺失则优雅降级（poster=None、尺寸 0、不报错）。`is_image_ext`/`is_video_ext`/`is_media_ext` + `scan_images`（实为媒体扫描）|
+| `protocol.rs` | — | 两个 URI scheme：`cameo://`（本地 Board 媒体 + **HTTP Range 206**，`<video>` seek/scrub 的地基）和 `cmnet://`（**代理远程图片**，SSRF 白名单只允许 public https）。均兼容 Windows WebView2 `http://<scheme>.localhost/...` 形态 |
+| `paths.rs` | — | 文件系统布局：全局 `~/.cameo/`（+ `bin/` 受管工具、posters）+ 每 Board `.cameo/`，`CAMEO_HOME` 可覆盖（测试/便携）|
+
+**受管外部工具（v0.1.8 视频）**
+| 文件 | 职责 |
+|---|---|
+| `tools/mod.rs` + `tools/ffmpeg.rs` | **受管 ffmpeg/ffprobe**。探测优先：`~/.cameo/bin` → 系统 PATH（复用 Codex 的 PATH 增强）。缺失则从 R2 manifest（`r.cameo.ink/tools/ffmpeg/manifest.json`）经 `net::client` 静默下载到 `~/.cameo/bin`，**blake3 校验通过后才置可执行 + 原子安装**，macOS ad-hoc codesign。`~/.cameo/bin` prepend 进 Codex sidecar PATH，agent 也能用。命令 `tool_status`/`tool_install`（进度走 `ffmpeg:progress`/`ffmpeg:done`/`ffmpeg:failed` 事件）。也提供 `probe_video`/`extract_poster` 给 `assets.rs`。**不打包二进制**（见 §9）|
 
 **系统服务**
 | 文件 | 行数 | 职责 |
@@ -368,6 +373,7 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 | `boards.jsonl` | 最近 Board 注册表（每行一条 JSON）| `workspace.rs` |
 | `device_id` | 匿名 UUID v4（单行）| `device.rs` |
 | `logs/cameo.YYYY-MM-DD.log` | 日滚日志，保留 14 天 | `logging.rs` |
+| `bin/ffmpeg` `bin/ffprobe` | 受管下载的二进制（仅当用户系统无 ffmpeg 时）；prepend 进 Codex PATH | `tools/ffmpeg.rs` |
 
 ### 8.2 每 Board sidecar（`<folder>/.cameo/`）
 
@@ -381,12 +387,13 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 | `sessions.json` | active session id + `SessionMeta[]` | `session.rs` |
 | `sessions/<id>.jsonl` | 消息时间线（`ChatMessage` JSON）。**由 runtime（codex.rs）权威写入**，绑定 turn 的 session、不依赖前端聚焦（修复了旧版前端 best-effort 落盘可能静默丢历史的问题）| `codex.rs` 写 / `session.rs` IO |
 | `thumbs/` | blake3-named 缩略图缓存 | `assets.rs` |
+| `posters/<hash>.jpg` | 视频首帧 poster（内容寻址，= 画布上视频的静帧纹理）| `assets.rs`（ffmpeg 抽帧）|
 | `tmp/` | dispatch 临时图（clean + overlay）—— 放在 workspace 内是为了让 Codex sandbox 能读 | `codex.rs` |
 
 ### 8.3 文件命名（Asset on disk）
 
 - **imported**：保留原文件名（用户已经按习惯命名了）。
-- **generated / crop / paste**：`<kind>-<timestamp>.png`（如 `generated-20260524-221736.png`）。
+- **generated / crop / paste / frame**：`<kind>-<timestamp>.<ext>`（图为 png；视频产出保留源扩展名）。`frame` = 从视频抽出的帧。
 - 加 hash 后缀（blake3 前 8 位）做 collision dedup。
 
 ### 8.4 schema 迁移
@@ -395,6 +402,10 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 - 涨 `BoardDoc.version`；
 - 加迁移函数（`storage.rs::load_board_doc`）；
 - 老版本读得出来，新版本读得出来。
+
+**当前 `BOARD_DOC_VERSION = 3`**（v0.1.8）：Asset 加时基媒体字段（`durationMs/fps/hasAudio/posterPath`，全
+additive `Option`）+ `Origin::Frame`。`mediaKind`（image/video）**不落盘**，前端从 `mime` 派生（`lib/media.ts`），
+不会过期。迁移是 no-op + 重新 stamp version（老 doc 无新字段即 `None`）。v2 = `Asset.origin`。
 
 ---
 
@@ -406,6 +417,10 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 用用户自己装、已登录的那份，运行时 PATH 上找），所以打包很轻 —— 无 Node runtime、无 per-arch 原生
 模块、无二进制下载。
 
+**ffmpeg 同理不打包**（v0.1.8）：探测用户自己的优先；缺失时运行时从 R2 manifest 按需下载到
+`~/.cameo/bin`（blake3 pin 校验，见 §4 `tools/ffmpeg.rs`）。安装包仍然轻。代价（已知接受）：发布
+manifest 的 maintainer 是 GPL ffmpeg 的分发者 —— GPL 对应源码义务 + H.264/HEVC 专利（见 PRD §8.3）。
+
 ### 9.2 脚本（仓库根）
 
 `.sh` = mac / `.ps1` = win，同名不同后缀对应平台。
@@ -416,6 +431,7 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 | `build_dev.{sh,ps1}` | unsigned 调试包：mac 出 `Cameo.app`，win 出 `cameo.exe` |
 | `build_release.{sh,ps1}` | mac 默认出 **universal** `.dmg`（arm64 + Intel 一份），可 `--arm` / `--intel` / `--both`；win 出 NSIS 安装器 |
 | `publish_release.{sh,ps1}` | R2 发布（updater payload/manifest + 官网 `latest*.json` + 安装包）并把安装包镜像到 GitHub Release |
+| `publish_ffmpeg.sh` | R2 发布受管 ffmpeg：算各平台 blake3 + size，生成 + 上传 `tools/ffmpeg/manifest.json`（app 按需下载用，见 §4）。需 `b3sum` + rclone + R2 凭据；`--accept-gpl` 强制确认 GPL/专利义务 |
 
 ### 9.3 签名
 
