@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { ipc } from "../lib/ipc";
 import { useHistoryStore } from "./history";
+import { useUiStore } from "./ui";
 import type { Asset, ImportResult, Placement, PlacementUpdate, Shape } from "../types";
 
 export interface GenPlaceholder {
@@ -159,6 +160,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         opening: false,
       });
       useHistoryStore.getState().clear(); // history is per-board
+      useUiStore.getState().setTool("select"); // a board always opens on Select
     } catch (e) {
       set({ opening: false, error: String(e) });
     }
