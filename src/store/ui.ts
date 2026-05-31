@@ -1,14 +1,15 @@
 import { create } from "zustand";
 import type { SceneStats } from "../canvas/scene";
 
-/** Canvas interaction modes. The mark tools draw an annotation that points the
- *  agent at a spot/region. "point" is the default: click to drop a numbered
- *  note pin; rect/ellipse/brush drag out a region. */
-export type Tool = "select" | "point" | "rect" | "ellipse" | "brush";
+/** Canvas interaction modes. "select" transforms; "hand" pans the canvas with a
+ *  left-drag (the visible counterpart to hold-Space pan, for mouse users). The
+ *  mark tools draw an annotation that points the agent at a spot/region:
+ *  "point" drops a numbered note pin; rect/ellipse/brush drag out a region. */
+export type Tool = "select" | "hand" | "point" | "rect" | "ellipse" | "brush";
 export type MarkShape = "point" | "rect" | "ellipse" | "brush";
 export type CanvasZoomDirection = "in" | "out" | "reset";
 export const MARK_SHAPES: MarkShape[] = ["point", "rect", "ellipse", "brush"];
-export const isMarkTool = (t: Tool): t is MarkShape => t !== "select";
+export const isMarkTool = (t: Tool): t is MarkShape => t !== "select" && t !== "hand";
 export const CHAT_PANEL_MIN_WIDTH = 380;
 export const CHAT_PANEL_DEFAULT_WIDTH = 460;
 export const CHAT_PANEL_MAX_WIDTH = 640;
@@ -28,6 +29,11 @@ interface UiState {
   setStats: (s: SceneStats) => void;
   tool: Tool;
   setTool: (t: Tool) => void;
+  /** True while Space is held for transient pan — lights up the Hand tool so
+   *  hold-to-pan is discoverable. The persistent `tool` is left untouched, so
+   *  releasing Space reverts to whatever tool was active. */
+  spaceHand: boolean;
+  setSpaceHand: (active: boolean) => void;
   compare: CompareState | null;
   setCompare: (c: CompareState | null) => void;
   /** Placement id currently in crop mode (drives the crop modal), or null. */
@@ -54,6 +60,8 @@ export const useUiStore = create<UiState>((set) => ({
   setStats: (stats) => set({ stats }),
   tool: "select",
   setTool: (tool) => set({ tool }),
+  spaceHand: false,
+  setSpaceHand: (spaceHand) => set({ spaceHand }),
   compare: null,
   setCompare: (compare) => set({ compare }),
   cropping: null,

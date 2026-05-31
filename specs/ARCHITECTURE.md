@@ -271,7 +271,7 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 
 - `main.tsx` —— React DOM root，挂到 `#root`。
 - `App.tsx` —— 顶层 layout：TopBar（标题 / 工作区开关 / AI 面板开关 / 设置 / 更新提示）+
-  ToolBar（mark 工具 / 导入 / 选择 / 撤销 / 重做）+ CameoCanvas（PixiJS）+ ChatPanel +
+  ToolBar（选择 / 抓手 / mark 工具 / 导入；缩放 + 小地图 + 撤销 / 重做在 HUD）+ CameoCanvas（PixiJS）+ ChatPanel +
   SettingsModal。所有 store 的订阅都在 App / 各组件内做。
 
 ### 6.2 状态（Zustand 单例 store）
@@ -298,7 +298,7 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 | 文件 | 行 | 职责 |
 |---|---:|---|
 | `CameoCanvas.tsx` | 233 | React mount + 桥接 board↔scene；SelectionBar / CropOverlay / CanvasContextMenu 子组件 |
-| `scene.ts` | 1969 | **PixiJS 引擎**：sprite/text 渲染、选区描边、移动手柄、手势（pointer/touch）、crop 模式、标注（点/框/椭圆/涂抹）、纹理缓存、stats（FPS / vertices）、context menu dispatch |
+| `scene.ts` | 1969 | **PixiJS 引擎**：sprite/text 渲染、选区描边、移动手柄、手势（pointer/touch；平移=空格/抓手工具/中键、缩放=滚轮、可点击小地图导航）、crop 模式、标注（点/框/椭圆/涂抹）、纹理缓存、stats（FPS / vertices）、context menu dispatch |
 
 **性能纪律**
 - 视口剔除 + LOD / mipmap + TextureGC eviction + 大图不进 atlas + 解码离主线程。

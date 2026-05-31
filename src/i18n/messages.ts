@@ -13,7 +13,8 @@ export const en = {
   "topbar.images_one": "{count} image",
 
   // Toolbar (tooltips) + mark tool
-  "tool.select": "Select",
+  "tool.select": "Select (V)",
+  "tool.hand": "Hand · drag to pan (H, or hold Space)",
   "tool.mark": "Mark",
   "tool.markType": "Mark type",
   "tool.addImage": "Add images",
@@ -261,7 +262,8 @@ export const zh: Record<MsgKey, string> = {
   "topbar.images": "{count} 张图片",
   "topbar.images_one": "{count} 张图片",
 
-  "tool.select": "选择",
+  "tool.select": "选择（V）",
+  "tool.hand": "抓手 · 拖动平移（H，或按住空格）",
   "tool.mark": "批注",
   "tool.markType": "批注类型",
   "tool.addImage": "添加图片",

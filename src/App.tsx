@@ -3,6 +3,7 @@ import {
   PanelLeft,
   PanelRight,
   MousePointer2,
+  Hand,
   ImagePlus,
   Map as MapIcon,
   Undo2,
@@ -166,6 +167,7 @@ function MarkTool() {
 function Toolbar() {
   const tool = useUiStore((s) => s.tool);
   const setTool = useUiStore((s) => s.setTool);
+  const spaceHand = useUiStore((s) => s.spaceHand);
   const t = useT();
   return (
     <div className="cm-toolbar">
@@ -176,6 +178,14 @@ function Toolbar() {
         aria-label={t("tool.select")}
       >
         <MousePointer2 size={17} />
+      </button>
+      <button
+        className={`cm-toolbtn${tool === "hand" || spaceHand ? " is-active" : ""}`}
+        onClick={() => setTool("hand")}
+        data-tip={t("tool.hand")}
+        aria-label={t("tool.hand")}
+      >
+        <Hand size={17} />
       </button>
       <MarkTool />
       <span className="cm-toolbar__sep" />

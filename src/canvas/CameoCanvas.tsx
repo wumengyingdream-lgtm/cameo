@@ -54,6 +54,7 @@ export function CameoCanvas() {
     void scene.init(host, {
       onStats: (s) => alive && useUiStore.getState().setStats(s),
       onSelectionChange: (ids) => alive && useBoardStore.getState().setSelection(ids),
+      onSpacePanChange: (active) => alive && useUiStore.getState().setSpaceHand(active),
       onCommitMoves: (u) => alive && void useBoardStore.getState().commitMoves(u),
       onAnnotate: (id, shapes) => alive && useBoardStore.getState().setAnnotation(id, shapes),
       onRename: (id, name) => alive && void useBoardStore.getState().renameAsset(id, name),
@@ -205,6 +206,8 @@ export function CameoCanvas() {
         }
       } else if (e.key === "v" || e.key === "V") {
         useUiStore.getState().setTool("select");
+      } else if (e.key === "h" || e.key === "H") {
+        useUiStore.getState().setTool("hand");
       } else if (e.key === "r" || e.key === "R") {
         useUiStore.getState().setTool("rect");
       }
