@@ -13,7 +13,12 @@ use serde::{Deserialize, Serialize};
 /// Current `board.json` schema version. Bump + migrate on shape changes.
 /// v2: added `Asset.origin` (additive — old docs default to `imported`, then
 /// generated assets are recovered on load via lineage backfill, see board.rs).
-pub const BOARD_DOC_VERSION: u32 = 2;
+/// v3: added time-based media fields on `Asset` (`duration_ms`/`fps`/`has_audio`/
+/// `poster_path`) + the `Frame` origin. All additive `Option` (old docs load
+/// with `None`); the migration is therefore a no-op beyond re-stamping the
+/// version — `media_kind` is NOT stored, it's derived from `mime` on the
+/// frontend (src/lib/media.ts) so it can never go stale.
+pub const BOARD_DOC_VERSION: u32 = 3;
 
 /// How an Asset entered the Board. Drives the on-disk naming scheme
 /// (`<origin>-<timestamp>` for minted files; imports keep their original name)
@@ -30,6 +35,9 @@ pub enum Origin {
     Crop,
     /// Pasted from the clipboard.
     Paste,
+    /// A still extracted from a video Asset (lineage in the Placement's
+    /// `parent_id`, like any derived output). Drives `frame-<timestamp>` naming.
+    Frame,
 }
 
 impl Default for Origin {
@@ -63,6 +71,22 @@ pub struct Asset {
     /// How this Asset entered the Board (additive — old docs default to `imported`).
     #[serde(default)]
     pub origin: Origin,
+    // ── Time-based media (v3, video). All additive `Option`: `None` on images
+    // and on any video minted while ffmpeg was unavailable. `media_kind` is NOT
+    // stored — derive it from `mime` (image/* vs video/*) so it can't go stale.
+    /// Video duration in milliseconds (from ffprobe).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<f64>,
+    /// Video frame rate (from ffprobe `avg_frame_rate`), for frame stepping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f64>,
+    /// Whether the video carries an audio stream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_audio: Option<bool>,
+    /// Board-relative path to the extracted poster frame (the canvas renders this
+    /// as the still texture; `<video>` overlays it only when focused).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster_path: Option<String>,
 }
 
 /// A placed instance of an Asset on the canvas. Mutating a Placement never

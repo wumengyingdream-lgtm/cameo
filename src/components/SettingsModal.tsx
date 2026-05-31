@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { AlertCircle, CheckCircle2, Loader2, X } from "lucide-react";
 import { useSettingsStore } from "../store/settings";
+import { useBoardStore } from "../store/board";
 import { VersionSection } from "./VersionSection";
 import { useT, useLocaleStore, type LocaleChoice } from "../i18n/locale";
 import { ipc } from "../lib/ipc";
 import type { MsgKey } from "../i18n/messages";
-import type { ProxyProbeResult, ProxySettings } from "../types";
+import type { FfmpegStatus, ProxyProbeResult, ProxySettings } from "../types";
 
 const PROTOCOLS: ProxySettings["protocol"][] = ["http", "socks5"];
 
@@ -269,9 +271,98 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             )}
           </section>
 
+          <FfmpegSection />
+
           <VersionSection />
         </div>
       </div>
     </div>
+  );
+}
+
+/** Managed ffmpeg/ffprobe status + one-click install (decision D1: detect the
+ *  user's own install first, else download a pinned build into ~/.cameo/bin).
+ *  The video modality is unavailable until this is ready. */
+function FfmpegSection() {
+  const t = useT();
+  const [status, setStatus] = useState<FfmpegStatus | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = () => {
+    void ipc.toolStatus().then(setStatus).catch(() => setStatus(null));
+  };
+
+  useEffect(() => {
+    refresh();
+    const unlisten = [
+      listen<{ downloaded: number; total: number }>("ffmpeg:progress", (e) => {
+        const { downloaded, total } = e.payload;
+        setProgress(total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : null);
+      }),
+      listen("ffmpeg:done", () => {
+        setProgress(null);
+        setError(null);
+        refresh();
+        // A manual install can finish while a poster-less video sits on the
+        // board — backfill its poster now so it stops showing as a placeholder.
+        void useBoardStore.getState().backfillVideoPosters();
+      }),
+      listen<string>("ffmpeg:failed", (e) => {
+        setProgress(null);
+        setError(String(e.payload));
+        refresh();
+      }),
+    ];
+    return () => {
+      void Promise.all(unlisten).then((fns) => fns.forEach((f) => f()));
+    };
+  }, []);
+
+  const installing = status?.state === "installing" || progress !== null;
+  const install = () => {
+    setError(null);
+    setProgress(0);
+    void ipc.toolInstall().catch((e) => {
+      setProgress(null);
+      setError(String(e));
+    });
+  };
+
+  const stateLabel = (): string => {
+    if (installing) return t("ffmpeg.installing");
+    switch (status?.state) {
+      case "ready":
+        return t("ffmpeg.ready");
+      case "failed":
+        return t("ffmpeg.failed");
+      default:
+        return t("ffmpeg.missing");
+    }
+  };
+
+  return (
+    <section className="cm-set-section">
+      <div className="cm-set-section__head">
+        <h3 className="cm-set-section__title">{t("ffmpeg.title")}</h3>
+        {status?.state !== "ready" && !installing && (
+          <button className="cm-btn cm-btn--primary" onClick={install}>
+            {t("ffmpeg.install")}
+          </button>
+        )}
+      </div>
+      <div className="cm-set-row">
+        <span className="cm-set-row__label">
+          {stateLabel()}
+          {installing && progress !== null ? ` · ${progress}%` : ""}
+        </span>
+      </div>
+      <p className="cm-set-section__desc">
+        {status?.state === "ready" && status.version ? status.version : t("ffmpeg.desc")}
+      </p>
+      {(error || status?.error) && (
+        <p className="cm-set-hint cm-set-hint--err">{error || status?.error}</p>
+      )}
+    </section>
   );
 }

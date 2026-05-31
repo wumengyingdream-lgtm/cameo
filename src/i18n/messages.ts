@@ -4,6 +4,22 @@
 // NOT here — it's always English (lib/imageActions, lib/overlay).
 
 export const en = {
+  // Video (canvas player + ffmpeg managed tool)
+  "vid.play": "Play",
+  "vid.pause": "Pause",
+  "vid.mute": "Mute",
+  "vid.unmute": "Unmute",
+  "vid.prevFrame": "Previous frame",
+  "vid.nextFrame": "Next frame",
+  "vid.extractFrame": "Extract frame",
+  "ffmpeg.title": "Video tools (ffmpeg)",
+  "ffmpeg.desc": "Required to play, scrub, and edit video.",
+  "ffmpeg.ready": "Ready",
+  "ffmpeg.missing": "Not installed",
+  "ffmpeg.installing": "Installing…",
+  "ffmpeg.failed": "Install failed",
+  "ffmpeg.install": "Install",
+
   // Topbar
   "topbar.workspaces": "Workspaces",
   "topbar.aiPanel": "AI panel",
@@ -255,6 +271,21 @@ export const en = {
 export type MsgKey = keyof typeof en;
 
 export const zh: Record<MsgKey, string> = {
+  // Video
+  "vid.play": "播放",
+  "vid.pause": "暂停",
+  "vid.mute": "静音",
+  "vid.unmute": "取消静音",
+  "vid.prevFrame": "上一帧",
+  "vid.nextFrame": "下一帧",
+  "vid.extractFrame": "提取此帧",
+  "ffmpeg.title": "视频工具 (ffmpeg)",
+  "ffmpeg.desc": "播放、拖动进度和编辑视频所需。",
+  "ffmpeg.ready": "已就绪",
+  "ffmpeg.missing": "未安装",
+  "ffmpeg.installing": "安装中…",
+  "ffmpeg.failed": "安装失败",
+  "ffmpeg.install": "安装",
   "topbar.workspaces": "工作区",
   "topbar.aiPanel": "AI 面板",
   "topbar.settings": "设置",

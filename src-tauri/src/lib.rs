@@ -23,6 +23,7 @@ pub mod proxy;
 pub mod runtime;
 pub mod session;
 pub mod storage;
+pub mod tools;
 pub mod tray;
 pub mod workspace;
 
@@ -96,6 +97,8 @@ pub fn run() {
             updater::check_pending_update,
             updater::install_pending_update,
             commands::open_logs_dir,
+            commands::tool_status,
+            commands::tool_install,
             commands::read_clipboard_image,
             commands::detect_codex,
             commands::probe_codex_auth,
@@ -116,6 +119,8 @@ pub fn run() {
             commands::delete_placements,
             commands::restore_placements,
             commands::replace_placement_image,
+            commands::extract_frame,
+            commands::backfill_video_posters,
             commands::reveal_in_finder,
             commands::copy_image,
             commands::export_asset,

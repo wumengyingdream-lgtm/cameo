@@ -5,6 +5,7 @@ import type {
   CodexInfo,
   CodexSkillInfo,
   CodexSkillRef,
+  FfmpegStatus,
   Asset,
   BoardInfo,
   GenSettings,
@@ -76,6 +77,23 @@ export const ipc = {
       bytes,
       ext,
     }),
+
+  /** Extract a still from a video placement → new image Asset placed right of
+   *  the video with lineage. `bytes` is a PNG captured from the <video>. */
+  extractFrame: (boardId: string, placementId: string, bytes: number[]) =>
+    invoke<ImportResult>("extract_frame", { boardId, placementId, bytes }),
+
+  /** After an ffmpeg install, backfill posters + metadata for videos minted
+   *  while it was missing. Returns the Assets that changed (to merge locally). */
+  backfillVideoPosters: (boardId: string) =>
+    invoke<Asset[]>("backfill_video_posters", { boardId }),
+
+  // ── Managed tools (ffmpeg) ────────────────────────────────────────────────
+  /** Current ffmpeg/ffprobe status (ready / missing / installing / failed). */
+  toolStatus: () => invoke<FfmpegStatus>("tool_status"),
+  /** Download + verify ffmpeg/ffprobe into ~/.cameo/bin. Progress arrives via
+   *  the `ffmpeg:progress` event; terminal state via `ffmpeg:done`/`ffmpeg:failed`. */
+  toolInstall: () => invoke<void>("tool_install"),
 
   // Export
   revealInFinder: (boardId: string, placementId: string) =>
@@ -189,6 +207,8 @@ export interface ChatImageResolution {
   absPath: string;
   exists: boolean;
   isImage: boolean;
+  /** "image" | "video" for a usable result; "" when unusable. */
+  mediaKind: string;
   inWorkspace: boolean;
   workspaceRelPath: string | null;
   thumbDataUrl: string | null;

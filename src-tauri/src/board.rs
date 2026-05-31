@@ -301,6 +301,10 @@ mod tests {
             mime: "image/png".into(),
             created_at: 0,
             origin: Origin::Imported,
+            duration_ms: None,
+            fps: None,
+            has_audio: None,
+            poster_path: None,
         }
     }
 

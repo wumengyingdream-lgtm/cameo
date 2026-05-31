@@ -13,6 +13,7 @@ import {
 import type { Asset, Placement, PlacementUpdate, Shape, ShapeKind } from "../types";
 import { cameoUrl, ipc } from "../lib/ipc";
 import { loadAssetObjectUrl } from "../lib/asset-url";
+import { isVideoAsset, stillPathOf } from "../lib/media";
 
 export type Tool = "select" | "hand" | "point" | "rect" | "ellipse" | "brush";
 
@@ -163,12 +164,16 @@ async function loadTexture(url: string): Promise<Texture> {
 }
 
 async function loadBoardTexture(boardId: string, asset: Asset): Promise<Texture> {
-  const url = cameoUrl(boardId, asset.path);
+  // Videos render their extracted poster frame as the canvas still; images
+  // render their own file. A poster is a JPEG, so fall back with that mime.
+  const stillPath = stillPathOf(asset);
+  const stillMime = isVideoAsset(asset) ? "image/jpeg" : asset.mime;
+  const url = cameoUrl(boardId, stillPath);
   try {
     return await loadTexture(url);
   } catch (err) {
-    void ipc.frontLog("warn", `protocol texture load failed ${asset.path}: ${err}; using IPC bytes`);
-    const objectUrl = await loadAssetObjectUrl(boardId, asset.path, asset.mime);
+    void ipc.frontLog("warn", `protocol texture load failed ${stillPath}: ${err}; using IPC bytes`);
+    const objectUrl = await loadAssetObjectUrl(boardId, stillPath, stillMime);
     try {
       return await loadTexture(objectUrl);
     } finally {
@@ -205,6 +210,14 @@ export class CanvasScene {
   private selected = new Set<string>();
   private hoveredId: string | null = null;
   private tool: Tool = "select";
+
+  /** Whether a placement's backing asset is a video (annotation/crop are gated
+   *  off for time-based media — overlay-as-image is meaningless per-frame). */
+  private isVideoPlacement(id: string): boolean {
+    const p = this.placements.get(id);
+    const a = p && this.assets.get(p.assetId);
+    return !!a && a.mime.startsWith("video/");
+  }
 
   // Interaction state.
   private mode:
@@ -878,7 +891,10 @@ export class CanvasScene {
     this.placementLayer.addChild(container);
     this.nodes.set(p.id, node);
 
-    if (this.boardId && asset) {
+    // A video with no poster (ffmpeg was unavailable at mint) has nothing to
+    // raster — keep the placeholder until it's re-minted with a poster.
+    const renderable = asset && (!isVideoAsset(asset) || !!asset.posterPath);
+    if (this.boardId && asset && renderable) {
       loadBoardTexture(this.boardId, asset)
         .then((tex) => {
           const current = this.nodes.get(p.id);
@@ -1710,9 +1726,13 @@ export class CanvasScene {
       return;
     }
 
+    // Video placements aren't annotatable (overlay-as-image is per-frame
+    // meaningless) — fall through to plain select/move regardless of tool.
+    const annotatable = !this.isVideoPlacement(id);
+
     // Point mark (纯批注): a single click drops a numbered pin at the spot and
     // immediately opens its note box. No drag.
-    if (this.tool === "point") {
+    if (annotatable && this.tool === "point") {
       const node = this.nodes.get(id);
       if (!node) return;
       const local = node.container.toLocal(e.global);
@@ -1727,7 +1747,7 @@ export class CanvasScene {
 
     // Region mark tool: drag out an annotation (rect/ellipse/brush) on this node.
     // (Hand left-drag already returned via beginPan above; exclude it for typing.)
-    if (this.tool !== "select" && this.tool !== "hand") {
+    if (annotatable && this.tool !== "select" && this.tool !== "hand") {
       const node = this.nodes.get(id);
       if (!node) return;
       this.mode = "annotate";

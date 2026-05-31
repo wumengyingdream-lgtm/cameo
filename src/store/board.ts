@@ -2,7 +2,28 @@ import { create } from "zustand";
 import { ipc } from "../lib/ipc";
 import { useHistoryStore } from "./history";
 import { useUiStore } from "./ui";
+import { useToastStore } from "./toast";
+import { getMessage } from "../i18n/locale";
 import type { Asset, ImportResult, Placement, PlacementUpdate, Shape } from "../types";
+
+/** A video minted without a poster means ffmpeg was unavailable at import time.
+ *  Kick off a one-time managed install (detect-first; downloads only if truly
+ *  missing) so playback/scrub/poster light up — App listens for `ffmpeg:done`
+ *  to backfill posters. Safe to call repeatedly: the Rust install guards against
+ *  concurrent runs and no-ops when ffmpeg is already present. */
+function maybeInstallFfmpegFor(assets: Asset[]): void {
+  if (!assets.some((a) => a.mime.startsWith("video/") && !a.posterPath)) return;
+  void ipc.toolStatus().then((st) => {
+    if (st.state === "ready" || st.state === "installing") return;
+    useToastStore.getState().show(getMessage("ffmpeg.installing"), "info");
+    // toolInstall resolves after the install completes; backfill posters for the
+    // videos that minted poster-less so they stop showing as placeholder tiles.
+    void ipc
+      .toolInstall()
+      .then(() => useBoardStore.getState().backfillVideoPosters())
+      .catch(() => undefined);
+  });
+}
 
 export interface GenPlaceholder {
   x: number;
@@ -60,6 +81,12 @@ interface BoardState {
   revealPlacement: (id: string) => void;
   /** Rename the file backing a placement's asset (persists; updates path). */
   renameAsset: (placementId: string, newName: string) => Promise<void>;
+  /** Extract a still from a video placement (PNG bytes captured from <video>)
+   *  → new image Asset placed right-of-video with lineage; selects it. */
+  extractFrame: (placementId: string, bytes: Uint8Array) => Promise<void>;
+  /** Merge poster/metadata updates from a post-install ffmpeg backfill so the
+   *  canvas swaps placeholder tiles for real stills (no reopen). */
+  backfillVideoPosters: () => Promise<void>;
 }
 
 function indexById<T extends { id: string }>(items: T[]): Map<string, T> {
@@ -173,6 +200,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const result = await ipc.importPaths(boardId, paths);
       set((s) => mergeImport(s, result));
       pushImportUndo(boardId, result.placements, set);
+      maybeInstallFfmpegFor(result.assets);
       return result.placements;
     } catch (e) {
       set({ error: String(e) });
@@ -187,6 +215,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const result = centerImport(get(), await ipc.importPaths(boardId, paths), center);
       set((s) => mergeImport(s, result));
       pushImportUndo(boardId, result.placements, set);
+      maybeInstallFfmpegFor(result.assets);
       const updates = result.placements.map((p) => ({
         id: p.id,
         x: p.x,
@@ -247,6 +276,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     if (result.placements.length > 0) {
       pushImportUndo(boardId, result.placements, set);
     }
+    maybeInstallFfmpegFor(result.assets);
   },
 
   commitMoves: async (updates) => {
@@ -406,6 +436,36 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         };
         useHistoryStore.getState().push({ label: "Crop", undo: () => apply(before), redo: () => apply(after) });
       }
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  extractFrame: async (placementId, bytes) => {
+    const { boardId } = get();
+    if (!boardId) return;
+    try {
+      const result = await ipc.extractFrame(boardId, placementId, Array.from(bytes));
+      set((s) => mergeImport(s, result));
+      const newId = result.placements[0]?.id;
+      if (newId) set({ selection: new Set([newId]) });
+      pushImportUndo(boardId, result.placements, set);
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  backfillVideoPosters: async () => {
+    const { boardId } = get();
+    if (!boardId) return;
+    try {
+      const updated = await ipc.backfillVideoPosters(boardId);
+      if (updated.length === 0) return;
+      set((s) => {
+        const assets = new Map(s.assets);
+        for (const a of updated) assets.set(a.id, a);
+        return { assets };
+      });
     } catch (e) {
       set({ error: String(e) });
     }

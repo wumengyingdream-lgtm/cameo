@@ -771,7 +771,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       .then((res) => {
         set((s) => {
           const next = new Map(s.imageResolutions);
-          next.set(path, res.exists && res.isImage ? res : "missing");
+          // Accept any usable media (image OR video — the resolver tags
+          // mediaKind); only mark missing when the file truly isn't there or
+          // isn't supported.
+          const usable = res.exists && res.mediaKind !== "";
+          next.set(path, usable ? res : "missing");
           return { imageResolutions: next };
         });
       })

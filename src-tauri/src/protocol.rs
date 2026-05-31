@@ -96,15 +96,79 @@ pub fn handle_cameo_uri<R: tauri::Runtime>(
         .first_or_octet_stream()
         .to_string();
 
+    // `<video>` seek (frame scrubbing) requires byte-range support — without a
+    // 206 response the element refuses to seek and treats the source as
+    // unseekable. Honor a single `Range: bytes=start-end`; everything else
+    // (images, full fetches) still gets a 200 with `Accept-Ranges` advertised.
+    let total = bytes.len() as u64;
+    if let Some(range) = request
+        .headers()
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| parse_byte_range(h, total))
+    {
+        let (start, end) = range; // inclusive end
+        let slice = bytes[start as usize..=end as usize].to_vec();
+        return Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(header::CONTENT_TYPE, mime)
+            .header(header::ACCEPT_RANGES, "bytes")
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{total}"),
+            )
+            .header("Access-Control-Allow-Origin", "*")
+            .header("Cache-Control", "no-store")
+            .body(slice)
+            .unwrap_or_else(|_| {
+                error_response(StatusCode::INTERNAL_SERVER_ERROR, "build response")
+            });
+    }
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime)
+        // Advertise range support so `<video>` knows it can seek on a re-request.
+        .header(header::ACCEPT_RANGES, "bytes")
         // The webview origin (http://localhost:1420 in dev, tauri://localhost in
         // prod) fetches this cross-origin for textures.
         .header("Access-Control-Allow-Origin", "*")
         .header("Cache-Control", "no-store")
         .body(bytes)
         .unwrap_or_else(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "build response"))
+}
+
+/// Parse a single `bytes=start-end` range against the resource size. Returns an
+/// inclusive `(start, end)` clamped in-bounds, or `None` when the header is
+/// malformed / unsatisfiable (caller falls back to a full 200). Multi-range
+/// (`bytes=0-9,20-29`) is intentionally unsupported — `<video>` never sends it.
+fn parse_byte_range(header: &str, total: u64) -> Option<(u64, u64)> {
+    if total == 0 {
+        return None;
+    }
+    let spec = header.trim().strip_prefix("bytes=")?;
+    if spec.contains(',') {
+        return None;
+    }
+    let (start_s, end_s) = spec.split_once('-')?;
+    let (start, end) = match (start_s.trim(), end_s.trim()) {
+        // Suffix range: last N bytes (`bytes=-500`).
+        ("", e) => {
+            let n: u64 = e.parse().ok()?;
+            if n == 0 {
+                return None;
+            }
+            (total.saturating_sub(n), total - 1)
+        }
+        // Open-ended: from start to EOF (`bytes=500-`).
+        (s, "") => (s.parse().ok()?, total - 1),
+        // Closed range (`bytes=0-1023`).
+        (s, e) => (s.parse().ok()?, e.parse::<u64>().ok()?.min(total - 1)),
+    };
+    if start > end || start >= total {
+        return None;
+    }
+    Some((start, end))
 }
 
 fn error_response(code: StatusCode, msg: &str) -> Response<Vec<u8>> {
@@ -244,5 +308,38 @@ mod tests {
         let (board, rel) = parse_cameo_uri(&uri).unwrap();
         assert_eq!(board, "board-1");
         assert_eq!(rel, "gen-20260526.png");
+    }
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::parse_byte_range;
+
+    #[test]
+    fn closed_range_is_inclusive() {
+        assert_eq!(parse_byte_range("bytes=0-99", 1000), Some((0, 99)));
+    }
+
+    #[test]
+    fn open_ended_runs_to_eof() {
+        assert_eq!(parse_byte_range("bytes=500-", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn suffix_range_is_last_n_bytes() {
+        assert_eq!(parse_byte_range("bytes=-200", 1000), Some((800, 999)));
+    }
+
+    #[test]
+    fn end_is_clamped_to_size() {
+        assert_eq!(parse_byte_range("bytes=0-99999", 1000), Some((0, 999)));
+    }
+
+    #[test]
+    fn rejects_unsatisfiable_or_malformed() {
+        assert_eq!(parse_byte_range("bytes=2000-3000", 1000), None);
+        assert_eq!(parse_byte_range("bytes=abc", 1000), None);
+        assert_eq!(parse_byte_range("bytes=0-9,20-29", 1000), None); // multi-range
+        assert_eq!(parse_byte_range("bytes=0-0", 0), None); // empty resource
     }
 }

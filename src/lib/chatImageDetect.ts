@@ -33,7 +33,10 @@ export interface ImageRef {
   alt?: string;
 }
 
-const IMAGE_EXTS = "(?:png|jpe?g|webp|gif|bmp|tiff?|avif)";
+// Image AND video extensions — a video path the agent emits should render as an
+// inline <video> block (the Rust resolver tags each result's mediaKind). Video
+// list mirrors VIDEO_EXTS in src/lib/media.ts + src-tauri/src/assets.rs.
+const MEDIA_EXTS = "(?:png|jpe?g|webp|gif|bmp|tiff?|avif|mp4|webm|mov|m4v)";
 
 // Markdown image / link to image: `![alt](image.png)` or `[text](image.png)`.
 // `!?` allows both forms; the path *must* end in a known image extension so
@@ -41,7 +44,7 @@ const IMAGE_EXTS = "(?:png|jpe?g|webp|gif|bmp|tiff?|avif)";
 // required (Q5: never half-render). `[^)]+` stops at the first `)` so the
 // match doesn't run away across the rest of the message.
 const MD_RE = new RegExp(
-  String.raw`!?\[([^\]]*)\]\(([^)]+\.${IMAGE_EXTS})\)`,
+  String.raw`!?\[([^\]]*)\]\(([^)]+\.${MEDIA_EXTS})\)`,
   "gi",
 );
 
@@ -51,7 +54,7 @@ const PATH_BODY = String.raw`[^\s\`"'()<>，。！？；：、]`;
 // workspace filenames. Capture the leading boundary instead of using lookbehind
 // so start/end offsets stay explicit and robust across webviews.
 const PLAIN_RE = new RegExp(
-  String.raw`(^|[\s\`"'(（])((?:[A-Za-z]:[\\/]|~[\\/]|\.{1,2}[\\/]|${PATH_BODY}*[\\/])?${PATH_BODY}*\.${IMAGE_EXTS})(?=[\s\`"'),.!?:;，。！？；：、）\]]|$)`,
+  String.raw`(^|[\s\`"'(（])((?:[A-Za-z]:[\\/]|~[\\/]|\.{1,2}[\\/]|${PATH_BODY}*[\\/])?${PATH_BODY}*\.${MEDIA_EXTS})(?=[\s\`"'),.!?:;，。！？；：、）\]]|$)`,
   "gi",
 );
 

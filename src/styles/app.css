@@ -3719,3 +3719,79 @@ body.cm-chat-resizing {
   text-align: center;
   color: var(--cm-fg-secondary);
 }
+
+/* On-canvas video player (VideoOverlay). The scene positions the root to the
+   focused video's image rect each frame; the <video> is pointer-events:none so
+   canvas drag/select pass through it, and only the control bar captures pointer
+   (DESIGN.md — mirrors the selection-bar surface/border/shadow language). */
+.cm-vidip {
+  position: absolute;
+  z-index: 30;
+  pointer-events: none;
+}
+.cm-vidip__area {
+  position: absolute;
+  inset: 0;
+  transform: rotate(var(--cm-vid-rotation, 0rad));
+  transform-origin: center center;
+  overflow: hidden;
+}
+.cm-vidip__video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+}
+.cm-vidip__bar {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 10px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-border);
+  border-radius: var(--cm-radius-md);
+  box-shadow: var(--cm-shadow-lg);
+  pointer-events: auto;
+  white-space: nowrap;
+}
+.cm-vidip__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--cm-radius-sm);
+  background: transparent;
+  color: var(--cm-ink);
+  cursor: pointer;
+}
+.cm-vidip__btn:hover {
+  background: var(--cm-accent-soft);
+}
+.cm-vidip__btn--accent {
+  color: var(--cm-accent);
+}
+.cm-vidip__scrub {
+  width: 150px;
+  accent-color: var(--cm-accent);
+  cursor: pointer;
+}
+.cm-vidip__time {
+  min-width: 76px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cm-ink-muted);
+}
+
+/* ffmpeg install error line — red accent doubles as the error color in the
+   light+red design system (no dedicated danger token). */
+.cm-set-rowsub--error {
+  color: var(--cm-accent);
+}

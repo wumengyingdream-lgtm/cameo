@@ -162,10 +162,13 @@ fn push_windows_fallback_paths(parts: &mut Vec<PathBuf>) {
     }
 }
 
-fn build_augmented_path(include_shell_path: bool) -> String {
+pub(crate) fn build_augmented_path(include_shell_path: bool) -> String {
     #[cfg(windows)]
     let _ = include_shell_path;
     let mut parts: Vec<PathBuf> = Vec::new();
+    // Managed tools (ffmpeg/ffprobe Cameo downloaded) win first, so both the
+    // Codex sidecar and Cameo's own probes find them (tools::ffmpeg, decision E4).
+    push_unique(&mut parts, crate::tools::bin_dir());
     if let Some(existing) = std::env::var_os("PATH") {
         push_split_path(&mut parts, &existing);
     }
