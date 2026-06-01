@@ -161,7 +161,7 @@ Cameo 是一个**桌面 app**（Tauri 2 + React + PixiJS），把 OpenAI 的 **C
 **受管外部工具（v0.1.8 视频）**
 | 文件 | 职责 |
 |---|---|
-| `tools/mod.rs` + `tools/ffmpeg.rs` | **受管 ffmpeg/ffprobe**。探测优先：`~/.cameo/bin` → 系统 PATH（复用 Codex 的 PATH 增强）。缺失则从 R2 manifest（`r.cameo.ink/tools/ffmpeg/manifest.json`）经 `net::client` 静默下载到 `~/.cameo/bin`，**blake3 校验通过后才置可执行 + 原子安装**，macOS ad-hoc codesign。`~/.cameo/bin` prepend 进 Codex sidecar PATH，agent 也能用。命令 `tool_status`/`tool_install`（进度走 `ffmpeg:progress`/`ffmpeg:done`/`ffmpeg:failed` 事件）。也提供 `probe_video`/`extract_poster` 给 `assets.rs`。**不打包二进制**（见 §9）|
+| `tools/mod.rs` + `tools/ffmpeg.rs` | **受管 ffmpeg/ffprobe**。**探测优先（detect-first）**：系统 PATH（复用 Codex 的 PATH 增强）→ 兜底 `~/.cameo/bin`，用户自装的永远赢。缺失则从 R2 manifest（`r.cameo.ink/tools/ffmpeg/manifest.json`）经 `net::client` 静默下载到 `~/.cameo/bin`，**blake3 校验通过后才置可执行 + 原子安装**（两个都验过再一起 promote），macOS ad-hoc codesign。`~/.cameo/bin` **append（最末）**进 Codex sidecar PATH，agent 也能用但优先用户那份。命令 `tool_status`/`tool_install`（进度走 `ffmpeg:progress`/`ffmpeg:done`/`ffmpeg:failed` 事件）。也提供 `probe_video`/`extract_poster` 给 `assets.rs`。**不打包二进制**（见 §9）|
 
 **系统服务**
 | 文件 | 行数 | 职责 |
@@ -373,7 +373,7 @@ TS 侧镜像于 `src/types.ts::CodexEvent`（serde camelCase wire form）。
 | `boards.jsonl` | 最近 Board 注册表（每行一条 JSON）| `workspace.rs` |
 | `device_id` | 匿名 UUID v4（单行）| `device.rs` |
 | `logs/cameo.YYYY-MM-DD.log` | 日滚日志，保留 14 天 | `logging.rs` |
-| `bin/ffmpeg` `bin/ffprobe` | 受管下载的二进制（仅当用户系统无 ffmpeg 时）；prepend 进 Codex PATH | `tools/ffmpeg.rs` |
+| `bin/ffmpeg` `bin/ffprobe` | 受管下载的二进制（仅当用户系统无 ffmpeg 时）；append（兜底）进 Codex PATH，用户自装的优先 | `tools/ffmpeg.rs` |
 
 ### 8.2 每 Board sidecar（`<folder>/.cameo/`）
 

@@ -85,6 +85,12 @@ interface Node {
   noteLayer: Container;
   content: Sprite | null;
   assetId: string;
+  /** The still source this node's texture was loaded from (image path, or a
+   *  video's poster path). When it changes for the SAME assetId — e.g. a video
+   *  gains a poster after a post-install ffmpeg backfill — the node must rebuild
+   *  even though assetId didn't change. "" = nothing renderable yet (poster-less
+   *  video showing the placeholder). */
+  stillKey: string;
   w: number;
   h: number;
 }
@@ -153,6 +159,19 @@ function clamp(v: number, lo: number, hi: number): number {
 
 let shapeSeq = 0;
 const makeShapeId = (): string => `m${Date.now().toString(36)}${(shapeSeq++).toString(36)}`;
+
+/** The rebuild key for an asset's canvas node: the texture source it would load
+ *  (image path, or a video's poster — "" when nothing's renderable yet) PLUS the
+ *  intrinsic dimensions. setData rebuilds a node when this changes for the same
+ *  assetId, covering both: (a) a video gaining a poster after a post-install
+ *  ffmpeg backfill, and (b) ffprobe succeeding (real w/h) while poster
+ *  extraction still failed — dims change but posterPath stays null, so the
+ *  placeholder must still be re-sized off the old 480² nominal. */
+function stillKeyOf(asset: Asset | undefined): string {
+  if (!asset) return "";
+  const src = isVideoAsset(asset) ? (asset.posterPath ?? "") : asset.path;
+  return `${src}|${asset.width}x${asset.height}`;
+}
 
 /** Decode off the main thread and wrap as a PixiJS texture. */
 async function loadTexture(url: string): Promise<Texture> {
@@ -422,8 +441,12 @@ export class CanvasScene {
     for (const p of placements.values()) {
       const existing = this.nodes.get(p.id);
       if (existing) {
-        if (existing.assetId !== p.assetId) {
-          // Asset swapped (e.g. crop bake / undo) — rebuild to load the new texture.
+        // Rebuild when the backing asset swapped (crop bake / undo) OR when the
+        // still source changed for the same asset — a video gaining a poster
+        // after a post-install ffmpeg backfill keeps assetId but flips stillKey
+        // from "" to the poster path (C3).
+        const nextStill = stillKeyOf(assets.get(p.assetId));
+        if (existing.assetId !== p.assetId || existing.stillKey !== nextStill) {
           this.destroyNode(existing);
           this.nodes.delete(p.id);
           if (this.hoveredId === p.id) this.hoveredId = null;
@@ -881,7 +904,18 @@ export class CanvasScene {
     const outline = new Graphics();
     container.addChild(outline);
 
-    const node: Node = { container, placeholder, outline, anno, noteLayer, content: null, assetId: p.assetId, w, h };
+    const node: Node = {
+      container,
+      placeholder,
+      outline,
+      anno,
+      noteLayer,
+      content: null,
+      assetId: p.assetId,
+      stillKey: stillKeyOf(asset),
+      w,
+      h,
+    };
     container.on("pointerover", () => this.setHoveredNode(p.id));
     container.on("pointerout", () => this.setHoveredNode(null));
     container.on("pointerdown", (e: FederatedPointerEvent) => this.onNodePointerDown(p.id, e));

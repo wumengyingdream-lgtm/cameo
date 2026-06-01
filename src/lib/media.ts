@@ -8,6 +8,11 @@ import type { Asset, MediaKind } from "../types";
  *  `VIDEO_EXTS` in src-tauri/src/assets.rs — keep in sync. */
 export const VIDEO_EXTS = ["mp4", "webm", "mov", "m4v"] as const;
 
+/** Regex-alternation of the video extensions (e.g. "mp4|webm|mov|m4v"), so the
+ *  chat-path detector (chatImageDetect.ts) derives its video list from this one
+ *  source instead of re-listing them. */
+export const VIDEO_EXT_ALT = VIDEO_EXTS.join("|");
+
 export function mediaKindOfMime(mime: string | null | undefined): MediaKind {
   return mime?.startsWith("video/") ? "video" : "image";
 }

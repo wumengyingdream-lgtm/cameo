@@ -9,8 +9,10 @@ import type { Asset, ImportResult, Placement, PlacementUpdate, Shape } from "../
 
 /** A video minted without a poster means ffmpeg was unavailable at import time.
  *  Kick off a one-time managed install (detect-first; downloads only if truly
- *  missing) so playback/scrub/poster light up — App listens for `ffmpeg:done`
- *  to backfill posters. Safe to call repeatedly: the Rust install guards against
+ *  missing) so playback/scrub/poster light up. This path backfills posters
+ *  itself once toolInstall resolves (the chained `.then` below); the Settings
+ *  panel separately backfills on its own `ffmpeg:done` listener for installs the
+ *  user triggers there. Safe to call repeatedly: the Rust install guards against
  *  concurrent runs and no-ops when ffmpeg is already present. */
 function maybeInstallFfmpegFor(assets: Asset[]): void {
   if (!assets.some((a) => a.mime.startsWith("video/") && !a.posterPath)) return;
@@ -464,12 +466,16 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const { boardId } = get();
     if (!boardId) return;
     try {
-      const updated = await ipc.backfillVideoPosters(boardId);
-      if (updated.length === 0) return;
+      const result = await ipc.backfillVideoPosters(boardId);
+      if (result.assets.length === 0 && result.placements.length === 0) return;
+      // Merge updated assets (poster + real dims) AND any placements re-tiered
+      // from the nominal placeholder size — Rust already persisted both.
       set((s) => {
         const assets = new Map(s.assets);
-        for (const a of updated) assets.set(a.id, a);
-        return { assets };
+        for (const a of result.assets) assets.set(a.id, a);
+        const placements = new Map(s.placements);
+        for (const p of result.placements) placements.set(p.id, p);
+        return { assets, placements };
       });
     } catch (e) {
       set({ error: String(e) });

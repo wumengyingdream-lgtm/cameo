@@ -33,6 +33,12 @@ fn ext_of(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// Placeholder square for a video whose real dimensions are unknown (ffmpeg
+/// missing / probe failed). Must match the frontend's `asset?.width || 480`
+/// fallback in scene.ts so layout and rendered size agree (W3). Also used by
+/// backfill to anchor legacy 0×0 placements on their displayed footprint.
+pub const NOMINAL_VIDEO_DIM: u32 = 480;
+
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -72,7 +78,17 @@ pub fn mint_asset(folder: &Path, rel_path: &str, origin: Origin) -> Result<Asset
     if mime.starts_with("video/") || is_video_ext(&ext_of(&abs)) {
         let id = hash_file_hex(&abs)?;
         let meta = crate::tools::ffmpeg::probe_video(&abs);
-        let (width, height) = meta.as_ref().map(|m| (m.width, m.height)).unwrap_or((0, 0));
+        // When ffmpeg is missing (or ffprobe gave 0×0), fall back to a nominal
+        // square that matches the frontend's `asset?.width || 480` placeholder
+        // size (scene.ts) — otherwise Rust's footprint/flow_layout treats the
+        // tile as zero-size and stacks multiple poster-less videos on the same
+        // spot while the canvas draws 480px blocks that overlap (W3). A later
+        // backfill re-mints with the true dimensions.
+        let (width, height) = meta
+            .as_ref()
+            .map(|m| (m.width, m.height))
+            .filter(|&(w, h)| w > 0 && h > 0)
+            .unwrap_or((NOMINAL_VIDEO_DIM, NOMINAL_VIDEO_DIM));
         let poster_path = extract_video_poster(folder, &abs, &id);
         return Ok(Asset {
             id,

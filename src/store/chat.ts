@@ -244,6 +244,12 @@ function forceRestartSession(
   reason: string,
   opts: { autoRestart?: boolean } = { autoRestart: true },
 ): Partial<ChatState> {
+  // Settle per-turn telemetry for the in-flight turn before we tear it down.
+  // This is the common funnel for watchdog timeout / Stop-no-response /
+  // sessionComplete-while-running — none of which emit turnComplete/error, so
+  // without this the turn's metric would be silently dropped. endTurn is
+  // idempotent (no-ops when no turn is active), so a non-mid-turn restart is safe.
+  endTurn("aborted", reason);
   const autoRestart = opts.autoRestart ?? true;
   const boardId = useBoardStore.getState().boardId;
   const { messages } = st;
@@ -318,7 +324,10 @@ function failLocalTurn(st: ChatState, reason: string, scope?: TurnScope): Partia
   nextMessages[targetIndex] = failedAsst;
   const isLatestAssistant = !messages.slice(targetIndex + 1).some((m) => m.role === "assistant");
 
-  if (isLatestAssistant) watchdog.stop();
+  if (isLatestAssistant) {
+    watchdog.stop();
+    endTurn("error", reason); // settle the metric for a turn that never reached Codex
+  }
 
   // No persistence here: a turn that never reached Codex has no authoritative
   // record to write (Rust owns the timeline). The failure is shown live.

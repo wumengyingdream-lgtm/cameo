@@ -325,7 +325,10 @@ function FfmpegSection() {
     setProgress(0);
     void ipc.toolInstall().catch((e) => {
       setProgress(null);
-      setError(String(e));
+      // A concurrent install (e.g. the auto-trigger fired first) isn't a failure
+      // — don't show it as a red error; the progress events will drive the UI.
+      const msg = String(e);
+      if (!msg.includes("install already in progress")) setError(msg);
     });
   };
 

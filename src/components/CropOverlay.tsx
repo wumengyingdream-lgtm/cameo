@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { useUiStore } from "../store/ui";
 import { useBoardStore } from "../store/board";
 import { bakeCrop } from "../lib/crop";
+import { isVideoAsset } from "../lib/media";
 import { useT } from "../i18n/locale";
 
 interface Rect {
@@ -127,7 +128,10 @@ export function CropOverlay({ rootRef }: { rootRef: RefObject<HTMLDivElement | n
 
   const p = cropping ? placements.get(cropping) : null;
   const a = p && assets.get(p.assetId);
-  const show = !!cropping && !!a && !!boardId;
+  // Crop is image-only — bakeCrop image::open()s the file. A video can never be
+  // cropped (W1); guard the overlay itself so no entry path (button, key, or
+  // programmatic setCropping) can open it on a video.
+  const show = !!cropping && !!a && !isVideoAsset(a) && !!boardId;
 
   const startDrag = (mode: "move" | Corner) => (e: React.PointerEvent) => {
     e.preventDefault();

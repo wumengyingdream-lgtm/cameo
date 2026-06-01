@@ -84,9 +84,10 @@ export const ipc = {
     invoke<ImportResult>("extract_frame", { boardId, placementId, bytes }),
 
   /** After an ffmpeg install, backfill posters + metadata for videos minted
-   *  while it was missing. Returns the Assets that changed (to merge locally). */
+   *  while it was missing. Returns the changed Assets + any placements re-tiered
+   *  from the nominal placeholder size (both merged into the canvas mirror). */
   backfillVideoPosters: (boardId: string) =>
-    invoke<Asset[]>("backfill_video_posters", { boardId }),
+    invoke<ImportResult>("backfill_video_posters", { boardId }),
 
   // ── Managed tools (ffmpeg) ────────────────────────────────────────────────
   /** Current ffmpeg/ffprobe status (ready / missing / installing / failed). */

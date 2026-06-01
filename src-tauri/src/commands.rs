@@ -464,16 +464,21 @@ pub fn extract_frame(
 /// Backfill video metadata + posters for assets minted while ffmpeg was
 /// unavailable (poster-less). Called after a successful ffmpeg install so the
 /// canvas swaps placeholder tiles for real poster stills without a reopen
-/// (PRD §6.3). Returns only the Assets that changed; no-op when ffmpeg is still
-/// missing or there's nothing to backfill.
+/// (PRD §6.3). Returns the changed Assets AND any placements re-tiered from the
+/// nominal placeholder size, so the frontend mirror updates both. No-op when
+/// ffmpeg is still missing or there's nothing to backfill.
 #[tauri::command]
 pub fn backfill_video_posters(
     board_id: String,
     registry: State<Arc<BoardRegistry>>,
-) -> Result<Vec<Asset>, String> {
+) -> Result<ImportResult, String> {
+    let empty = || ImportResult {
+        assets: Vec::new(),
+        placements: Vec::new(),
+    };
     let entry = registry.get(&board_id).ok_or("unknown board")?;
     if crate::tools::ffmpeg::resolved().is_none() {
-        return Ok(Vec::new());
+        return Ok(empty());
     }
     // Snapshot candidates (videos with no poster) without holding the lock for IO.
     let candidates: Vec<Asset> = {
@@ -485,7 +490,7 @@ pub fn backfill_video_posters(
             .collect()
     };
     if candidates.is_empty() {
-        return Ok(Vec::new());
+        return Ok(empty());
     }
 
     // Re-mint each (ffprobe + poster) outside the lock — mint_asset is the single
@@ -499,11 +504,20 @@ pub fn backfill_video_posters(
         }
     }
     if updated.is_empty() {
-        return Ok(Vec::new());
+        return Ok(empty());
     }
 
-    with_doc_save(&entry, |doc| {
+    let changed_placements = with_doc_save(&entry, |doc| {
+        let mut changed: Vec<Placement> = Vec::new();
         for u in &updated {
+            // Capture the pre-update dimensions to compute the placeholder scale
+            // a placement would have had — so we only re-tier placements the user
+            // hasn't manually resized.
+            let old_dims = doc
+                .assets
+                .iter()
+                .find(|a| a.id == u.id)
+                .map(|a| (a.width, a.height));
             if let Some(a) = doc.assets.iter_mut().find(|a| a.id == u.id) {
                 a.width = u.width;
                 a.height = u.height;
@@ -512,10 +526,61 @@ pub fn backfill_video_posters(
                 a.has_audio = u.has_audio;
                 a.poster_path = u.poster_path.clone();
             }
+            // A poster-less video was placed against placeholder dimensions
+            // (the nominal 480² of W3, or 0×0 on legacy boards). Now that its
+            // real dimensions are known, every placement must adjust so the
+            // canvas isn't wrong after `scene.ts` rebuilds the node on the
+            // dimension change ([P2]):
+            //   - Untouched (still at the placeholder default scale) → re-tier to
+            //     the real video's display tier (a 4K clip lands at its tier, not
+            //     a multi-thousand-px slab).
+            //   - User-resized → PRESERVE the displayed footprint they chose, so
+            //     the same on-screen size is kept against the new real dimensions
+            //     instead of ballooning.
+            // Top-left position is preserved in both cases.
+            if let Some((ow, oh)) = old_dims {
+                // Displayed placeholder dims: a legacy 0×0 video was still drawn
+                // at the frontend's `width||480` fallback, so anchor on NOMINAL.
+                let disp_w = if ow > 0 { ow } else { assets::NOMINAL_VIDEO_DIM } as f64;
+                let disp_h = if oh > 0 { oh } else { assets::NOMINAL_VIDEO_DIM } as f64;
+                let placeholder = Asset { width: ow, height: oh, ..u.clone() };
+                let old_default = board::default_scale(&placeholder); // 0×0 → 1.0
+                let new_default = board::default_scale(u);
+                let new_longest = u.width.max(u.height) as f64;
+                for p in doc.placements.iter_mut().filter(|p| p.asset_id == u.id) {
+                    let is_default = (p.scale - old_default).abs() < f64::EPSILON;
+                    let new_scale = if is_default {
+                        new_default
+                    } else if new_longest > 0.0 {
+                        // Keep the displayed longest side the user chose.
+                        (disp_w.max(disp_h) * p.scale) / new_longest
+                    } else {
+                        p.scale
+                    };
+                    if (new_scale - p.scale).abs() < f64::EPSILON
+                        && (disp_w - u.width as f64).abs() < f64::EPSILON
+                        && (disp_h - u.height as f64).abs() < f64::EPSILON
+                    {
+                        continue; // nothing actually changed
+                    }
+                    // Anchor top-left as the footprint changes.
+                    let old_w = disp_w * p.scale;
+                    let old_h = disp_h * p.scale;
+                    let new_w = u.width as f64 * new_scale;
+                    let new_h = u.height as f64 * new_scale;
+                    p.x += (new_w - old_w) / 2.0;
+                    p.y += (new_h - old_h) / 2.0;
+                    p.scale = new_scale;
+                    changed.push(p.clone());
+                }
+            }
         }
-        Ok(())
+        Ok(changed)
     })?;
-    Ok(updated)
+    Ok(ImportResult {
+        assets: updated,
+        placements: changed_placements,
+    })
 }
 
 // ── Export (v0.0.2) ──────────────────────────────────────────────────────────
@@ -567,6 +632,19 @@ fn asset_rel_abs_path(entry: &BoardEntry, rel: &str) -> Result<PathBuf, String> 
 
 fn board_doc_asset_abs_path(entry: &BoardEntry, rel: &str) -> Result<PathBuf, String> {
     let rel_path = board_safe_rel_path(rel)?;
+    // A video's canvas still is its extracted poster under `.cameo/posters/`,
+    // which is NOT a tracked Asset (it lives in the sidecar). The frontend's
+    // texture-byte fallback (`readAssetBytes(boardId, stillPath)`, used when the
+    // cameo:// protocol load fails) asks for that poster path, so allow it here
+    // — the traversal guard above already confines `rel` to the board folder
+    // (W4). Everything else must be a tracked image/video asset.
+    let is_poster = matches!(
+        (rel_path.parent().and_then(|p| p.to_str()), rel_path.extension().and_then(|e| e.to_str())),
+        (Some(".cameo/posters"), Some("jpg"))
+    );
+    if is_poster {
+        return asset_rel_abs_path(entry, rel);
+    }
     let asset_path = {
         let doc = entry.doc.lock();
         let asset = doc

@@ -166,9 +166,6 @@ pub(crate) fn build_augmented_path(include_shell_path: bool) -> String {
     #[cfg(windows)]
     let _ = include_shell_path;
     let mut parts: Vec<PathBuf> = Vec::new();
-    // Managed tools (ffmpeg/ffprobe Cameo downloaded) win first, so both the
-    // Codex sidecar and Cameo's own probes find them (tools::ffmpeg, decision E4).
-    push_unique(&mut parts, crate::tools::bin_dir());
     if let Some(existing) = std::env::var_os("PATH") {
         push_split_path(&mut parts, &existing);
     }
@@ -182,6 +179,13 @@ pub(crate) fn build_augmented_path(include_shell_path: bool) -> String {
     push_unix_fallback_paths(&mut parts);
     #[cfg(windows)]
     push_windows_fallback_paths(&mut parts);
+    // Managed tools (ffmpeg/ffprobe Cameo downloaded) are the LAST resort — both
+    // Cameo's own resolver and the Codex sidecar prefer the user's own install
+    // (detect-first, decision E1 / review §4); the managed copy only kicks in
+    // when nothing else on PATH provides the tool. Codex's lookup of its OTHER
+    // tools is unaffected — this only adds one trailing dir, changing nothing
+    // about precedence for anything already on the user's PATH.
+    push_unique(&mut parts, crate::tools::bin_dir());
 
     std::env::join_paths(&parts)
         .map(|s| s.to_string_lossy().into_owned())

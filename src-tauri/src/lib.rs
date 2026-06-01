@@ -39,6 +39,7 @@ pub fn run() {
     // file sink from flushing (see logging::init).
     let _log_guard = logging::init();
     tracing::info!(module = "lib", "Cameo starting");
+    tools::ffmpeg::sweep_bin_temps(); // clear orphaned download temps from a prior crash
 
     let boards: Arc<BoardRegistry> = Arc::new(BoardRegistry::default());
     let codex_reg: Arc<CodexRegistry> = Arc::new(CodexRegistry::default());

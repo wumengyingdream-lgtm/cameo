@@ -1,8 +1,10 @@
 //! Managed ffmpeg/ffprobe: detect → (silent download) → verify → probe/poster.
 //!
-//! Resolution order (decision E1 — the user's own install wins):
-//!   1. `~/.cameo/bin/` (a build Cameo downloaded earlier)
-//!   2. system PATH + the same broad augmentation Codex uses (brew, etc.)
+//! Resolution order (decision E1 / review §4 — detect-first, the user's own
+//! install wins):
+//!   1. system PATH + the same broad augmentation Codex uses (brew, scoop, …)
+//!   2. `~/.cameo/bin/` (a build Cameo downloaded earlier) — appended LAST to
+//!      that augmented PATH, so it's only the fallback
 //!   3. neither → `Missing`; the UI offers a one-click install
 //!
 //! Install (decision D1 — R2-mirrored pinned build): fetch the signed-origin
@@ -26,12 +28,18 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(8);
+/// ffprobe/extract_poster get a longer ceiling than the `-version` liveness
+/// probe — real work, but still bounded so a corrupt/hung file or a stalled
+/// network-mounted path can never block import / backfill / open_board forever.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const MANIFEST_URL: &str = "https://r.cameo.ink/tools/ffmpeg/manifest.json";
 
 /// One install runs at a time (the UI button + an auto-trigger could both fire).
 static INSTALLING: AtomicBool = AtomicBool::new(false);
-/// Cached resolution; invalidated after a successful install.
-static RESOLVED: Mutex<Option<Option<Tools>>> = Mutex::new(None);
+/// Cache of a SUCCESSFUL resolution only (`Some(Tools)`); `None` = not resolved
+/// yet OR known-missing, both of which re-probe. Invalidated after install so
+/// the freshly-downloaded pair is re-resolved.
+static RESOLVED: Mutex<Option<Tools>> = Mutex::new(None);
 
 /// Resolved tool paths (both must be present to be usable).
 #[derive(Debug, Clone)]
@@ -102,32 +110,87 @@ fn runs_ok(bin: &Path) -> bool {
     }
 }
 
-/// Find one tool: managed dir first (E1: still prefer a working system build via
-/// the augmented PATH if the managed one is somehow broken), then PATH.
-fn resolve_one(name: &str) -> Option<PathBuf> {
-    let managed = bin_dir().join(exe(name));
-    if managed.is_file() && runs_ok(&managed) {
-        return Some(managed);
-    }
-    // Reuse the same broad PATH augmentation as the Codex resolver so brew /
-    // scoop / etc. installs are found from a GUI launch (minimal inherited PATH).
-    let search = crate::codex::build_augmented_path(false);
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    which::which_in(name, Some(&search), cwd)
-        .ok()
-        .filter(|p| runs_ok(p))
+/// Run a command to completion with a deadline, killing it (and reaping) on
+/// timeout so a hung ffmpeg/ffprobe never blocks the calling worker thread.
+/// Returns `(exit status, captured stdout)`, or `None` on spawn failure/timeout.
+/// The caller must have configured `stdout(piped())` + `stderr(null())`.
+///
+/// stdout is drained on a SEPARATE thread (not after exit): ffprobe's JSON can
+/// exceed the OS pipe buffer, and a child that blocks writing stdout would never
+/// reach exit — `try_wait` would never see completion and the deadline would
+/// kill a perfectly healthy process. Concurrent draining avoids that deadlock.
+fn output_with_deadline(
+    mut cmd: Command,
+    timeout: Duration,
+) -> Option<(std::process::ExitStatus, Vec<u8>)> {
+    cmd.stdin(std::process::Stdio::null());
+    let mut child = cmd.spawn().ok()?;
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut s) = stdout {
+            use std::io::Read;
+            let _ = s.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(30))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join(); // child killed → its stdout closes → reader returns
+                return None;
+            }
+        }
+    };
+    let stdout_bytes = reader.join().ok()?;
+    Some((status, stdout_bytes))
 }
 
-/// Resolve both tools, caching the result. `None` means at least one is missing.
+/// Find one tool, **detect-first** (decision E1 / review §4): the user's own
+/// install on PATH wins; only if none is found do we fall back to the managed
+/// `~/.cameo/bin` copy Cameo downloaded. This matches the locked decision and
+/// the Codex-CLI stance ("use the user's own ffmpeg"); the managed bin dir is
+/// appended (not prepended) to the augmented PATH in `codex::build_augmented_path`
+/// so the sidecar resolves the same way.
+fn resolve_one(name: &str) -> Option<PathBuf> {
+    // Reuse the same broad PATH augmentation as the Codex resolver so brew /
+    // scoop / etc. installs are found from a GUI launch (minimal inherited PATH).
+    // `~/.cameo/bin` is the LAST entry there, so a user install is preferred and
+    // the managed copy is the natural fallback in one `which_in` pass.
+    let search = crate::codex::build_augmented_path(false);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if let Some(found) = which::which_in(name, Some(&search), cwd).ok().filter(|p| runs_ok(p)) {
+        return Some(found);
+    }
+    // Defensive: the managed binary exists but wasn't on the search path for
+    // some reason — try it directly.
+    let managed = bin_dir().join(exe(name));
+    (managed.is_file() && runs_ok(&managed)).then_some(managed)
+}
+
+/// Resolve both tools. Caches only a successful `Some(Tools)` — never the
+/// `None` (missing) result — so a user who installs ffmpeg system-wide WHILE
+/// Cameo is running is picked up on the next call instead of being stuck at
+/// "missing" until restart (§3 negative-cache). The miss path re-probes each
+/// call, but it's cheap (a `which` lookup; only spawns `-version` on a hit).
 pub fn resolved() -> Option<Tools> {
-    if let Some(cached) = RESOLVED.lock().as_ref() {
-        return cached.clone();
+    if let Some(cached) = RESOLVED.lock().clone() {
+        return Some(cached);
     }
     let tools = match (resolve_one("ffmpeg"), resolve_one("ffprobe")) {
         (Some(ffmpeg), Some(ffprobe)) => Some(Tools { ffmpeg, ffprobe }),
         _ => None,
     };
-    *RESOLVED.lock() = Some(tools.clone());
+    if let Some(t) = &tools {
+        *RESOLVED.lock() = Some(t.clone());
+    }
     tools
 }
 
@@ -139,8 +202,10 @@ fn version_line(ffmpeg: &Path) -> Option<String> {
     let mut cmd = Command::new(ffmpeg);
     cmd.arg("-version");
     crate::process::hide_console_window(&mut cmd);
-    let out = cmd.output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let (_status, stdout) = output_with_deadline(cmd, RUN_TIMEOUT)?;
+    let text = String::from_utf8_lossy(&stdout);
     text.lines().next().map(|l| l.trim().to_string())
 }
 
@@ -202,11 +267,13 @@ pub fn probe_video(path: &Path) -> Option<VideoMeta> {
     ])
     .arg(path);
     crate::process::hide_console_window(&mut cmd);
-    let out = cmd.output().ok()?;
-    if !out.status.success() {
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let (status, stdout) = output_with_deadline(cmd, PROBE_TIMEOUT)?;
+    if !status.success() {
         return None;
     }
-    let json: Value = serde_json::from_slice(&out.stdout).ok()?;
+    let json: Value = serde_json::from_slice(&stdout).ok()?;
     let streams = json.get("streams")?.as_array()?;
 
     let mut meta = VideoMeta::default();
@@ -245,24 +312,42 @@ pub fn probe_video(path: &Path) -> Option<VideoMeta> {
 
 /// Extract the first frame to a JPEG poster. Returns false if ffmpeg is missing
 /// or the extraction failed (caller treats the video as poster-less).
+///
+/// Writes to a temp sibling and renames on success only — a timed-out / killed
+/// ffmpeg never leaves a half-written poster at `out` (which `extract_video_poster`
+/// would then treat as a valid cached poster forever). W2 + §3 resource-leak.
 pub fn extract_poster(video: &Path, out: &Path) -> bool {
     let Some(tools) = resolved() else {
         return false;
     };
-    if let Some(dir) = out.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
+    let dir = match out.parent() {
+        Some(d) => {
+            let _ = std::fs::create_dir_all(d);
+            d.to_path_buf()
+        }
+        None => return false,
+    };
+    // The temp MUST keep a `.jpg` extension: ffmpeg infers the output muxer from
+    // the filename, so a `.tmp` suffix makes it fail with "Unable to choose an
+    // output format". Use a hidden, randomized basename so it can't collide with
+    // the real poster or another concurrent extraction, but end in `.jpg`.
+    let tmp = dir.join(format!(".poster-{}.jpg", nanoid::nanoid!(8)));
     let mut cmd = Command::new(&tools.ffmpeg);
     cmd.args(["-y", "-loglevel", "error", "-ss", "0"])
         .arg("-i")
         .arg(video)
         .args(["-frames:v", "1", "-q:v", "3"])
-        .arg(out);
+        .arg(&tmp);
     crate::process::hide_console_window(&mut cmd);
-    match cmd.output() {
-        Ok(o) if o.status.success() && out.is_file() => true,
-        _ => false,
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let ok = matches!(output_with_deadline(cmd, PROBE_TIMEOUT), Some((s, _)) if s.success())
+        && tmp.is_file();
+    if ok && std::fs::rename(&tmp, out).is_ok() {
+        return true;
     }
+    let _ = std::fs::remove_file(&tmp); // clean partial/failed temp
+    false
 }
 
 // ── Install (R2 pinned build) ────────────────────────────────────────────────
@@ -301,8 +386,10 @@ fn adhoc_sign(path: &Path) {
     }
 }
 
-/// Stream one binary to a temp file while hashing, verify the blake3 pin, then
-/// atomically move it into the managed bin dir (+ chmod/sign).
+/// Stream one binary to a temp file while hashing, verify the blake3 pin, make
+/// it executable, and return the VERIFIED TEMP path (NOT yet promoted to its
+/// final name). The caller promotes ffmpeg + ffprobe together only after BOTH
+/// verify, so a mid-set failure never leaves a half install (W5).
 async fn download_verified(
     app: &AppHandle,
     name: &str,
@@ -331,7 +418,6 @@ async fn download_verified(
 
     let dir = bin_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("{name}: mkdir bin: {e}"))?;
-    let final_path = dir.join(exe(name));
     let tmp_path = dir.join(format!(".{}.{}.tmp", exe(name), nanoid::nanoid!(6)));
 
     let mut file = std::fs::File::create(&tmp_path)
@@ -383,13 +469,6 @@ async fn download_verified(
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755));
     }
-    // Atomic swap into place only after the bytes are verified + executable.
-    std::fs::rename(&tmp_path, &final_path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
-        format!("{name}: install move failed: {e}")
-    })?;
-    #[cfg(target_os = "macos")]
-    adhoc_sign(&final_path);
 
     let _ = app.emit(
         "ffmpeg:progress",
@@ -399,20 +478,99 @@ async fn download_verified(
             total,
         },
     );
-    Ok(final_path)
+    // Verified + executable, still under its temp name. Promotion happens in
+    // install_inner once the whole set is verified (W5).
+    Ok(tmp_path)
 }
+
+/// Result of promoting one verified temp binary: where it landed, and (if a
+/// binary already existed there) the `.bak` it was moved aside to, so the whole
+/// install can roll back to the prior set if a later promote fails.
+struct Promoted {
+    final_path: PathBuf,
+    backup: Option<PathBuf>,
+}
+
+/// Move a verified temp binary into its final managed name, then macOS ad-hoc
+/// sign. Any existing binary at the destination is moved aside to a `.bak`
+/// FIRST (not deleted) so the caller can restore it on rollback — without that,
+/// a failed later promote would leave the prior set destroyed (the very
+/// half-install state this flow avoids). Windows `rename` also can't overwrite,
+/// so moving the old one aside is required there regardless.
+fn promote(name: &str, tmp_path: &Path) -> Result<Promoted, String> {
+    let final_path = bin_dir().join(exe(name));
+    let mut backup = None;
+    if final_path.exists() {
+        let bak = final_path.with_extension(format!("bak.{}", nanoid::nanoid!(6)));
+        std::fs::rename(&final_path, &bak)
+            .map_err(|e| format!("{name}: back up existing failed: {e}"))?;
+        backup = Some(bak);
+    }
+    if let Err(e) = std::fs::rename(tmp_path, &final_path) {
+        // Restore the binary we moved aside, then clean the temp.
+        if let Some(bak) = &backup {
+            let _ = std::fs::rename(bak, &final_path);
+        }
+        let _ = std::fs::remove_file(tmp_path);
+        return Err(format!("{name}: install move failed: {e}"));
+    }
+    #[cfg(target_os = "macos")]
+    adhoc_sign(&final_path);
+    Ok(Promoted { final_path, backup })
+}
+
+/// Remove orphaned `.<name>.<nanoid>.tmp` files left by a crash/hard-kill mid
+/// download (every error path already cleans its own temp; this sweeps the
+/// crash case, mirroring assets::sweep_overlays). §3 startup-clean. Public so it
+/// can also run once at boot. NOTE: it deliberately does NOT touch `*.bak.*`
+/// promotion backups — a crash between "move old aside" and "rename new in"
+/// could leave the bak as the only surviving copy, so a stale bak is left in
+/// place (harmless: resolve_one only looks for the exact `ffmpeg`/`ffprobe`
+/// names, never a `.bak`).
+pub fn sweep_bin_temps() {
+    let Ok(rd) = std::fs::read_dir(bin_dir()) else { return };
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') && name.ends_with(".tmp") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Resets the `INSTALLING` flag on drop — so it clears on EVERY exit, including
+/// an unexpected panic in the install path (an early `store(false)` would be
+/// skipped by an unwind and wedge `status()` at "installing" forever). §3 RAII.
+struct InstallGuard;
+impl Drop for InstallGuard {
+    fn drop(&mut self) {
+        INSTALLING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Error returned when an install is already running — not a real failure. The
+/// frontend (SettingsModal) recognizes this string and doesn't show it as an
+/// error (a concurrent install is already in flight). §3.
+const ALREADY_IN_PROGRESS: &str = "install already in progress";
 
 /// Download + verify ffmpeg AND ffprobe from the R2 manifest. Emits
 /// `ffmpeg:progress` during, then `ffmpeg:done` / `ffmpeg:failed`.
 pub async fn install(app: AppHandle) -> Result<(), String> {
     if INSTALLING.swap(true, Ordering::SeqCst) {
-        return Err("install already in progress".into());
+        return Err(ALREADY_IN_PROGRESS.into());
     }
+    let guard = InstallGuard; // resets INSTALLING on every exit, panic included
     let result = install_inner(&app).await;
-    INSTALLING.store(false, Ordering::SeqCst);
+    if result.is_ok() {
+        invalidate();
+    }
+    // Clear the installing flag BEFORE emitting the terminal event: SettingsModal
+    // refreshes via `tool_status()` on `ffmpeg:done`/`ffmpeg:failed`, and would
+    // otherwise read a stale "installing" state and never leave it. The guard
+    // stays as a panic-only backstop.
+    drop(guard);
     match &result {
         Ok(()) => {
-            invalidate();
             let _ = app.emit("ffmpeg:done", ());
         }
         Err(e) => {
@@ -423,6 +581,8 @@ pub async fn install(app: AppHandle) -> Result<(), String> {
 }
 
 async fn install_inner(app: &AppHandle) -> Result<(), String> {
+    sweep_bin_temps(); // clear any orphaned temps from a prior crash
+
     let key = platform_key().ok_or_else(|| {
         format!(
             "no ffmpeg build for {}-{}",
@@ -445,21 +605,75 @@ async fn install_inner(app: &AppHandle) -> Result<(), String> {
         .and_then(|b| b.get(key))
         .ok_or_else(|| format!("manifest has no build for {key}"))?;
 
+    // Phase 1: download + verify BOTH to temp. A failure here promotes nothing,
+    // so the managed dir never holds a half set (W5).
+    let mut staged: Vec<(&str, PathBuf)> = Vec::new();
     for name in ["ffmpeg", "ffprobe"] {
-        let entry = build
-            .get(name)
-            .ok_or_else(|| format!("manifest build {key} missing {name}"))?;
-        download_verified(app, name, entry).await?;
+        let entry = match build.get(name) {
+            Some(e) => e,
+            None => {
+                for (_, t) in &staged {
+                    let _ = std::fs::remove_file(t);
+                }
+                return Err(format!("manifest build {key} missing {name}"));
+            }
+        };
+        match download_verified(app, name, entry).await {
+            Ok(tmp) => staged.push((name, tmp)),
+            Err(e) => {
+                for (_, t) in &staged {
+                    let _ = std::fs::remove_file(t);
+                }
+                return Err(e);
+            }
+        }
     }
 
-    invalidate();
-    // Confirm the freshly-installed pair actually runs on this arch.
-    match resolved() {
-        Some(_) => {
-            tracing::info!(module = "tools", "ffmpeg installed into managed bin dir");
-            Ok(())
+    // Phase 2: promote both. If one fails partway, ROLL BACK to the prior set —
+    // remove the ones we just promoted and restore their backups — so a failed
+    // update never destroys a working install ([P2] preserve old set).
+    let mut promoted: Vec<Promoted> = Vec::new();
+    for (name, tmp) in &staged {
+        match promote(name, tmp) {
+            Ok(p) => promoted.push(p),
+            Err(e) => {
+                for done in &promoted {
+                    let _ = std::fs::remove_file(&done.final_path);
+                    if let Some(bak) = &done.backup {
+                        let _ = std::fs::rename(bak, &done.final_path);
+                    }
+                }
+                for (_, t) in &staged {
+                    let _ = std::fs::remove_file(t);
+                }
+                return Err(e);
+            }
         }
-        None => Err("installed binaries did not verify (not executable?)".into()),
+    }
+    // Verify the freshly-promoted pair actually runs on this arch — BEFORE
+    // discarding the backups. A post-promote failure (e.g. codesign/exec error)
+    // must not leave broken binaries installed with the prior working pair
+    // already deleted ([P2] roll back before discarding backups).
+    invalidate();
+    if resolved().is_some() {
+        // Verified good — now it's safe to drop the backups of replaced binaries.
+        for done in &promoted {
+            if let Some(bak) = &done.backup {
+                let _ = std::fs::remove_file(bak);
+            }
+        }
+        tracing::info!(module = "tools", "ffmpeg installed into managed bin dir");
+        Ok(())
+    } else {
+        // The new binaries don't run — restore the previous working pair.
+        for done in &promoted {
+            let _ = std::fs::remove_file(&done.final_path);
+            if let Some(bak) = &done.backup {
+                let _ = std::fs::rename(bak, &done.final_path);
+            }
+        }
+        invalidate(); // re-resolve against the restored set next call
+        Err("installed binaries did not verify (not executable?)".into())
     }
 }
 
@@ -479,5 +693,38 @@ mod tests {
     fn platform_key_is_known_for_supported_targets() {
         // At least confirm the call doesn't panic on the host.
         let _ = platform_key();
+    }
+
+    /// Regression for the pipe-buffer deadlock: a child that writes far more
+    /// than the OS pipe buffer (~64 KiB) to stdout must still complete, because
+    /// stdout is drained concurrently rather than after exit. Before the fix
+    /// this would hang until the deadline killed a healthy process.
+    #[test]
+    #[cfg(unix)]
+    fn drains_stdout_larger_than_pipe_buffer() {
+        let big = 1_000_000; // ~1 MB, well over the pipe buffer
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(format!("yes x | head -c {big}"))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let (status, stdout) =
+            output_with_deadline(cmd, Duration::from_secs(10)).expect("should not time out");
+        assert!(status.success());
+        assert_eq!(stdout.len(), big);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn deadline_kills_a_hung_child() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("sleep 30")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let start = Instant::now();
+        let out = output_with_deadline(cmd, Duration::from_millis(300));
+        assert!(out.is_none());
+        assert!(start.elapsed() < Duration::from_secs(5)); // killed promptly, not after 30s
     }
 }

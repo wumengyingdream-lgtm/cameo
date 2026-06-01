@@ -28,9 +28,12 @@ interface TurnAcc extends TurnMeta {
   outputTokens: number;
 }
 
-// At most one turn is in flight per process; a fresh beginTurn supersedes any
-// stale accumulator (e.g. a watchdog-killed turn that never reached a terminal
-// event), so we never leak metrics across turns.
+// At most one turn is in flight per process. Terminal paths settle it explicitly:
+// turnComplete/error via the chat.ts taps, and abnormal teardowns (watchdog
+// restart, Stop-no-response, sessionComplete-mid-turn, local transport failure)
+// via endTurn() in forceRestartSession/failLocalTurn. A fresh beginTurn still
+// supersedes any accumulator abandoned without ANY terminal event (e.g. board
+// switch mid-turn), so we never leak metrics across turns.
 let acc: TurnAcc | null = null;
 
 /** Start measuring a turn. Reads model/effort/tier from the caller (chat.ts). */

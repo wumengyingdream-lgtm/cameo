@@ -20,6 +20,8 @@
  * or an inline image card.
  */
 
+import { VIDEO_EXT_ALT } from "./media";
+
 export interface ImageRef {
   /** Start index in the source text (inclusive). */
   start: number;
@@ -34,9 +36,12 @@ export interface ImageRef {
 }
 
 // Image AND video extensions — a video path the agent emits should render as an
-// inline <video> block (the Rust resolver tags each result's mediaKind). Video
-// list mirrors VIDEO_EXTS in src/lib/media.ts + src-tauri/src/assets.rs.
-const MEDIA_EXTS = "(?:png|jpe?g|webp|gif|bmp|tiff?|avif|mp4|webm|mov|m4v)";
+// inline <video> block (the Rust resolver tags each result's mediaKind). The
+// video half is derived from VIDEO_EXTS (lib/media.ts), the single TS source of
+// truth, so the two TS copies can't drift; only the Rust list (assets.rs) is
+// separately maintained (cross-language boundary).
+const IMAGE_EXT_ALT = "png|jpe?g|webp|gif|bmp|tiff?|avif";
+const MEDIA_EXTS = `(?:${IMAGE_EXT_ALT}|${VIDEO_EXT_ALT})`;
 
 // Markdown image / link to image: `![alt](image.png)` or `[text](image.png)`.
 // `!?` allows both forms; the path *must* end in a known image extension so
