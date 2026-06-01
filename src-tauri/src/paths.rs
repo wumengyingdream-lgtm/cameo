@@ -96,6 +96,14 @@ pub fn cameo_bin_dir() -> PathBuf {
     cameo_data_dir().join("bin")
 }
 
+/// `~/.cameo/skills` — Cameo's bundled Codex skills (real bodies). Seeded from the
+/// app binary on boot (see `skills::seed_bundled`) and symlinked into each Board
+/// folder's `.agents/skills/` so the Codex sidecar discovers them as repo-scope
+/// skills. Holds `registry.json` (enable/disable state) alongside the skill dirs.
+pub fn cameo_skills_dir() -> PathBuf {
+    cameo_data_dir().join("skills")
+}
+
 /// `<folder>/.cameo/tmp` — dispatch temp images (clean + overlay). Inside the
 /// workspace so the Codex sandbox can read them (decision D5).
 pub fn board_tmp_dir(folder: &Path) -> PathBuf {

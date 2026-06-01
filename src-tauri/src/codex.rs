@@ -977,6 +977,11 @@ pub async fn start_session(
     let folder = board_reg.folder(&board_id).ok_or("unknown board")?;
     let codex = resolve_codex()?;
 
+    // Link Cameo's enabled bundled skills into <folder>/.agents/skills/ BEFORE the
+    // sidecar spawns here — the app-server scans its cwd on startup, so the skills
+    // surface as repo-scope (ambiently available + in the `/` menu). Best-effort.
+    crate::skills::ensure_workspace_skills(&folder);
+
     let mut cmd = tokio::process::Command::new(&codex.path);
     crate::process::hide_tokio_console_window(&mut cmd);
     cmd.arg("app-server")

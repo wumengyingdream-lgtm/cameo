@@ -22,6 +22,7 @@ pub mod protocol;
 pub mod proxy;
 pub mod runtime;
 pub mod session;
+pub mod skills;
 pub mod storage;
 pub mod tools;
 pub mod tray;
@@ -40,6 +41,7 @@ pub fn run() {
     let _log_guard = logging::init();
     tracing::info!(module = "lib", "Cameo starting");
     tools::ffmpeg::sweep_bin_temps(); // clear orphaned download temps from a prior crash
+    skills::seed_bundled(); // materialize bundled Codex skills into ~/.cameo/skills
 
     let boards: Arc<BoardRegistry> = Arc::new(BoardRegistry::default());
     let codex_reg: Arc<CodexRegistry> = Arc::new(CodexRegistry::default());
