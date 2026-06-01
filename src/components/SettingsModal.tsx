@@ -17,6 +17,14 @@ const isValidHost = (h: string) => {
 };
 const isValidPort = (p: number) => p >= 1 && p <= 65535;
 
+/** "ffmpeg version 8.0.1 Copyright (c) 2000-2025 …" → "ffmpeg 8.0.1". The full
+ *  banner is long and noisy in the panel; we keep it in the row's title tooltip
+ *  and show just the number. Falls back to the raw string if it doesn't match. */
+const shortFfmpegVersion = (full: string): string => {
+  const m = full.match(/version\s+(\S+)/i);
+  return m ? `ffmpeg ${m[1]}` : full;
+};
+
 type ProxyProbeState =
   | { status: "idle" }
   | { status: "checking" }
@@ -128,6 +136,36 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         ? proxyProbe.detail
         : undefined;
 
+  // Live status line under the host:port row — invalid input, "applying", or
+  // the connectivity probe. null when there is nothing to say (idle), so the
+  // bordered status slot collapses instead of rendering an empty strip.
+  const proxyStatus =
+    !hostOk || !portOk ? (
+      <p className="cm-set-hint cm-set-hint--err">{t("settings.invalid")}</p>
+    ) : applying ? (
+      <p className="cm-set-hint">{t("settings.proxyApplying")}</p>
+    ) : proxyProbe.status !== "idle" ? (
+      <div
+        className={`cm-set-probe cm-set-probe--${proxyProbe.status}`}
+        title={proxyProbeDetail ?? undefined}
+      >
+        {proxyProbe.status === "checking" ? (
+          <Loader2 className="cm-set-probe__icon cm-set-probe__spin" size={14} />
+        ) : proxyProbe.status === "ok" ? (
+          <CheckCircle2 className="cm-set-probe__icon" size={14} />
+        ) : (
+          <AlertCircle className="cm-set-probe__icon" size={14} />
+        )}
+        <span className="cm-set-probe__text">
+          {proxyProbe.status === "checking"
+            ? t("settings.proxyProbe.checking")
+            : proxyProbe.status === "ok"
+              ? t("settings.proxyProbe.ok")
+              : t(proxyProbeMessageKey(proxyProbe.result?.kind ?? "error"))}
+        </span>
+      </div>
+    ) : null;
+
   return (
     <div className="cm-modal-backdrop" onClick={onClose}>
       <div className="cm-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
@@ -140,13 +178,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
         <div className="cm-modal__body">
           <section className="cm-set-section">
-            <h3 className="cm-set-section__title">{t("settings.general")}</h3>
-            <div className="cm-set-card">
-              <div className="cm-set-row">
-                <span className="cm-set-row__label">{t("settings.language")}</span>
+            <div className="cm-set-section__head">
+              <div className="cm-set-section__text">
+                <h3 className="cm-set-section__title">{t("settings.language")}</h3>
+                <p className="cm-set-section__desc">{t("settings.languageDesc")}</p>
+              </div>
+              <div className="cm-set-section__control">
                 <select
                   className="cm-select"
                   value={localeChoice}
+                  aria-label={t("settings.language")}
                   onChange={(e) => useLocaleStore.getState().setChoice(e.target.value as LocaleChoice)}
                 >
                   <option value="system">{t("settings.language.system")}</option>
@@ -159,115 +200,95 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
           <section className="cm-set-section">
             <div className="cm-set-section__head">
-              <h3 className="cm-set-section__title">{t("settings.tray")}</h3>
-              <button
-                type="button"
-                className={`cm-toggle${config.close_to_tray ? " is-on" : ""}`}
-                role="switch"
-                aria-checked={config.close_to_tray}
-                aria-label={t("settings.tray")}
-                onClick={() => void useSettingsStore.getState().setCloseToTray(!config.close_to_tray)}
-              >
-                <span className="cm-toggle__knob" />
-              </button>
+              <div className="cm-set-section__text">
+                <h3 className="cm-set-section__title">{t("settings.tray")}</h3>
+                <p className="cm-set-section__desc">{t("settings.trayDesc")}</p>
+              </div>
+              <div className="cm-set-section__control">
+                <button
+                  type="button"
+                  className={`cm-toggle${config.close_to_tray ? " is-on" : ""}`}
+                  role="switch"
+                  aria-checked={config.close_to_tray}
+                  aria-label={t("settings.tray")}
+                  onClick={() => void useSettingsStore.getState().setCloseToTray(!config.close_to_tray)}
+                >
+                  <span className="cm-toggle__knob" />
+                </button>
+              </div>
             </div>
-            <p className="cm-set-section__desc">{t("settings.trayDesc")}</p>
           </section>
 
           <section className="cm-set-section">
             <div className="cm-set-section__head">
-              <h3 className="cm-set-section__title">{t("settings.proxy")}</h3>
-              <button
-                type="button"
-                className={`cm-toggle${proxy.enabled ? " is-on" : ""}`}
-                role="switch"
-                aria-checked={proxy.enabled}
-                aria-label={t("settings.enableProxy")}
-                onClick={() => {
-                  set({ enabled: !proxy.enabled });
-                  commit();
-                }}
-              >
-                <span className="cm-toggle__knob" />
-              </button>
+              <div className="cm-set-section__text">
+                <h3 className="cm-set-section__title">{t("settings.proxy")}</h3>
+                <p className="cm-set-section__desc">{t("settings.proxyDesc")}</p>
+              </div>
+              <div className="cm-set-section__control">
+                <button
+                  type="button"
+                  className={`cm-toggle${proxy.enabled ? " is-on" : ""}`}
+                  role="switch"
+                  aria-checked={proxy.enabled}
+                  aria-label={t("settings.enableProxy")}
+                  onClick={() => {
+                    set({ enabled: !proxy.enabled });
+                    commit();
+                  }}
+                >
+                  <span className="cm-toggle__knob" />
+                </button>
+              </div>
             </div>
-            <p className="cm-set-section__desc">{t("settings.proxyDesc")}</p>
 
             {proxy.enabled && (
-              <>
-                <div className="cm-set-card">
-                  <div className="cm-set-row">
-                    <span className="cm-set-row__label">{t("settings.protocol")}</span>
-                    <select
-                      className="cm-select"
-                      value={proxy.protocol}
-                      onChange={(e) => {
-                        set({ protocol: e.target.value as ProxySettings["protocol"] });
-                        commit();
-                      }}
-                    >
-                      {PROTOCOLS.map((p) => (
-                        <option key={p} value={p}>
-                          {p}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="cm-set-row">
-                    <span className="cm-set-row__label">{t("settings.address")}</span>
-                    <div className="cm-set-endpoint">
-                      <input
-                        className={`cm-input cm-input--host${hostOk ? "" : " is-invalid"}`}
-                        value={proxy.host}
-                        placeholder="127.0.0.1"
-                        spellCheck={false}
-                        aria-label={t("settings.host")}
-                        onChange={(e) => set({ host: e.target.value })}
-                        onBlur={commit}
-                      />
-                      <span className="cm-set-endpoint__colon">:</span>
-                      <input
-                        className={`cm-input cm-input--port${portOk ? "" : " is-invalid"}`}
-                        type="number"
-                        min={1}
-                        max={65535}
-                        value={proxy.port}
-                        aria-label={t("settings.port")}
-                        onChange={(e) => set({ port: Number(e.target.value) || 0 })}
-                        onBlur={commit}
-                      />
-                    </div>
-                  </div>
+              <div className="cm-set-proxy">
+                {/* protocol · host : port — one line */}
+                <div className="cm-set-proxy__row">
+                  <select
+                    className="cm-select cm-select--proto"
+                    value={proxy.protocol}
+                    aria-label={t("settings.protocol")}
+                    onChange={(e) => {
+                      set({ protocol: e.target.value as ProxySettings["protocol"] });
+                      commit();
+                    }}
+                  >
+                    {PROTOCOLS.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className={`cm-input cm-input--host${hostOk ? "" : " is-invalid"}`}
+                    value={proxy.host}
+                    placeholder="127.0.0.1"
+                    spellCheck={false}
+                    aria-label={t("settings.host")}
+                    onChange={(e) => set({ host: e.target.value })}
+                    onBlur={commit}
+                  />
+                  <span className="cm-set-endpoint__colon">:</span>
+                  <input
+                    className={`cm-input cm-input--port${portOk ? "" : " is-invalid"}`}
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={proxy.port}
+                    aria-label={t("settings.port")}
+                    onChange={(e) => set({ port: Number(e.target.value) || 0 })}
+                    onBlur={commit}
+                  />
                 </div>
 
-                {!hostOk || !portOk ? (
-                  <p className="cm-set-hint cm-set-hint--err">{t("settings.invalid")}</p>
-                ) : applying ? (
-                  <p className="cm-set-hint">{t("settings.proxyApplying")}</p>
-                ) : proxyProbe.status !== "idle" ? (
-                  <div
-                    className={`cm-set-probe cm-set-probe--${proxyProbe.status}`}
-                    title={proxyProbeDetail ?? undefined}
-                    aria-live="polite"
-                  >
-                    {proxyProbe.status === "checking" ? (
-                      <Loader2 className="cm-set-probe__icon cm-set-probe__spin" size={14} />
-                    ) : proxyProbe.status === "ok" ? (
-                      <CheckCircle2 className="cm-set-probe__icon" size={14} />
-                    ) : (
-                      <AlertCircle className="cm-set-probe__icon" size={14} />
-                    )}
-                    <span className="cm-set-probe__text">
-                      {proxyProbe.status === "checking"
-                        ? t("settings.proxyProbe.checking")
-                        : proxyProbe.status === "ok"
-                          ? t("settings.proxyProbe.ok")
-                          : t(proxyProbeMessageKey(proxyProbe.result?.kind ?? "error"))}
-                    </span>
+                {proxyStatus && (
+                  <div className="cm-set-proxy__status" aria-live="polite">
+                    {proxyStatus}
                   </div>
-                ) : null}
-              </>
+                )}
+              </div>
             )}
           </section>
 
@@ -344,25 +365,33 @@ function FfmpegSection() {
     }
   };
 
+  const ready = status?.state === "ready" && !!status.version;
+  const tone = status?.state === "ready" ? "ok" : status?.state === "failed" ? "err" : "idle";
+
   return (
     <section className="cm-set-section">
       <div className="cm-set-section__head">
-        <h3 className="cm-set-section__title">{t("ffmpeg.title")}</h3>
-        {status?.state !== "ready" && !installing && (
-          <button className="cm-btn cm-btn--primary" onClick={install}>
-            {t("ffmpeg.install")}
-          </button>
-        )}
+        <div className="cm-set-section__text">
+          <h3 className="cm-set-section__title">{t("ffmpeg.title")}</h3>
+          <p
+            className={`cm-set-section__desc${ready ? " cm-set-section__desc--mono" : ""}`}
+            title={ready ? status!.version! : undefined}
+          >
+            {ready ? shortFfmpegVersion(status!.version!) : t("ffmpeg.desc")}
+          </p>
+        </div>
+        <div className="cm-set-section__control">
+          <span className={`cm-status cm-status--${tone}`}>
+            {stateLabel()}
+            {installing && progress !== null ? ` · ${progress}%` : ""}
+          </span>
+          {status?.state !== "ready" && !installing && (
+            <button className="cm-btn cm-btn--primary" onClick={install}>
+              {t("ffmpeg.install")}
+            </button>
+          )}
+        </div>
       </div>
-      <div className="cm-set-row">
-        <span className="cm-set-row__label">
-          {stateLabel()}
-          {installing && progress !== null ? ` · ${progress}%` : ""}
-        </span>
-      </div>
-      <p className="cm-set-section__desc">
-        {status?.state === "ready" && status.version ? status.version : t("ffmpeg.desc")}
-      </p>
       {(error || status?.error) && (
         <p className="cm-set-hint cm-set-hint--err">{error || status?.error}</p>
       )}

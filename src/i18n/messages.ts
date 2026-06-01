@@ -186,6 +186,7 @@ export const en = {
   "settings.title": "Settings",
   "settings.general": "General",
   "settings.language": "Language",
+  "settings.languageDesc": "Cameo's interface language — follow the system or pick one.",
   "settings.language.system": "System default",
   "settings.proxy": "Network proxy",
   "settings.proxyDesc": "Injected into the Codex session so model requests go through it. Changes apply live and restart the current session.",
@@ -225,6 +226,7 @@ export const en = {
   "settings.resetDeviceConfirm": "Reset device ID? The next launch will get a new identity.",
   "settings.resetDeviceDone": "Done — takes effect next launch.",
   "settings.about": "About",
+  "settings.aboutDesc": "Check for and install the latest version, or view the full changelog.",
   "settings.version": "Version",
 
   // Gallery — prompt inspiration overlay
@@ -438,6 +440,7 @@ export const zh: Record<MsgKey, string> = {
   "settings.title": "设置",
   "settings.general": "通用",
   "settings.language": "语言",
+  "settings.languageDesc": "Cameo 界面语言，跟随系统或手动指定。",
   "settings.language.system": "跟随系统",
   "settings.proxy": "网络代理",
   "settings.proxyDesc": "注入到 Codex 会话进程，让模型请求走代理。更改后实时生效，会自动重启当前会话。",
@@ -476,6 +479,7 @@ export const zh: Record<MsgKey, string> = {
   "settings.resetDeviceConfirm": "重置设备 ID？下次启动会换一个新身份。",
   "settings.resetDeviceDone": "已重置 — 下次启动生效。",
   "settings.about": "关于",
+  "settings.aboutDesc": "检查并安装最新版本，或查看完整更新记录。",
   "settings.version": "版本",
 
   "gallery.button": "Gallery",
