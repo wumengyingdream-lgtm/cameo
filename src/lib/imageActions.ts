@@ -1,6 +1,7 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useBoardStore } from "../store/board";
 import { useChatStore } from "../store/chat";
+import { track } from "../services/cloud/telemetry";
 import { ipc } from "./ipc";
 import { buildOverlays, buildMarkNotes } from "./overlay";
 
@@ -40,7 +41,10 @@ export function runImagePreset(boardId: string, pid: string, presetPrompt: strin
 /** Export one image via a native save dialog. */
 export async function exportImage(boardId: string, pid: string): Promise<void> {
   const dest = await save({ defaultPath: imageName(pid), title: "Export image" });
-  if (typeof dest === "string") await ipc.exportAsset(boardId, pid, dest);
+  if (typeof dest === "string") {
+    await ipc.exportAsset(boardId, pid, dest);
+    void track("image_exported", { count: 1 });
+  }
 }
 
 /** Export the current selection. Single image keeps Save As; multi-select picks
@@ -54,5 +58,8 @@ export async function exportImages(boardId: string, ids: string[]): Promise<void
   }
 
   const dest = await open({ directory: true, multiple: false, title: "Export images" });
-  if (typeof dest === "string") await ipc.exportAssets(boardId, uniqueIds, dest);
+  if (typeof dest === "string") {
+    await ipc.exportAssets(boardId, uniqueIds, dest);
+    void track("image_exported", { count: uniqueIds.length });
+  }
 }

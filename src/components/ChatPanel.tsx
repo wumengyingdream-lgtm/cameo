@@ -6,6 +6,7 @@ import { useBoardStore } from "../store/board";
 import { useSettingsStore } from "../store/settings";
 import { CHAT_PANEL_MAX_WIDTH, CHAT_PANEL_MIN_WIDTH, useUiStore } from "../store/ui";
 import { ipc } from "../lib/ipc";
+import { track } from "../services/cloud/telemetry";
 import { useAssetObjectUrl } from "../lib/asset-url";
 import type { Shape, CodexAuthStatus, CodexInfo } from "../types";
 import { Composer } from "./Composer";
@@ -14,6 +15,16 @@ import { AssistantMarkdown } from "./AssistantMarkdown";
 import { useT, useLocaleStore } from "../i18n/locale";
 import type { MsgKey } from "../i18n/messages";
 import codexIcon from "../assets/codex.png";
+
+// Codex install/auth state is the activation funnel (how many installs actually
+// have a working Codex). Report it once per launch on the first definitive probe
+// result — `detect` re-runs on reconnect/retry, but the signal only needs sampling once.
+let codexAuthReported = false;
+function reportCodexAuthOnce(props: { found: boolean; method?: string | null; requires_login?: boolean }): void {
+  if (codexAuthReported) return;
+  codexAuthReported = true;
+  void track("codex_auth_status", props);
+}
 
 /** "本轮标注" — staging area above the composer: every image carrying marks +
  *  their numbered notes, removable. This is the visible "what gets sent" with
@@ -391,20 +402,28 @@ function AgentStatus({ status, rateLimit }: { status: SessionStatus; rateLimit: 
         setInfo(nextInfo);
         if (!nextInfo.found) {
           setAuth({ status: "idle" });
+          reportCodexAuthOnce({ found: false });
           return;
         }
         try {
           const data = await ipc.probeCodexAuth();
           if (detectSeqRef.current !== seq) return;
           setAuth({ status: "ready", data });
+          reportCodexAuthOnce({
+            found: true,
+            method: data.authMethod?.toLowerCase() ?? null,
+            requires_login: !!data.requiresLogin,
+          });
         } catch (e) {
           if (detectSeqRef.current !== seq) return;
           setAuth({ status: "error", error: e instanceof Error ? e.message : String(e) });
+          reportCodexAuthOnce({ found: true }); // installed, auth state unknown
         }
       } catch {
         if (detectSeqRef.current !== seq) return;
         setInfo({ found: false });
         setAuth({ status: "idle" });
+        reportCodexAuthOnce({ found: false });
       } finally {
         if (detectSeqRef.current === seq) setLoading(false);
       }

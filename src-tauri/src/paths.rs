@@ -84,6 +84,26 @@ pub fn board_thumbs_dir(folder: &Path) -> PathBuf {
     board_sidecar_dir(folder).join("thumbs")
 }
 
+/// `<folder>/.cameo/posters` — extracted video poster frames (blake3-named JPEG),
+/// served via the Cameo image protocol as the canvas still for a video Asset.
+pub fn board_posters_dir(folder: &Path) -> PathBuf {
+    board_sidecar_dir(folder).join("posters")
+}
+
+/// `~/.cameo/bin` — managed external tools (ffmpeg/ffprobe). Prepended to the
+/// Codex sidecar PATH so the agent finds tools Cameo downloaded (see tools::ffmpeg).
+pub fn cameo_bin_dir() -> PathBuf {
+    cameo_data_dir().join("bin")
+}
+
+/// `~/.cameo/skills` — Cameo's bundled Codex skills (real bodies). Seeded from the
+/// app binary on boot (see `skills::seed_bundled`) and symlinked into each Board
+/// folder's `.agents/skills/` so the Codex sidecar discovers them as repo-scope
+/// skills. Holds `registry.json` (enable/disable state) alongside the skill dirs.
+pub fn cameo_skills_dir() -> PathBuf {
+    cameo_data_dir().join("skills")
+}
+
 /// `<folder>/.cameo/tmp` — dispatch temp images (clean + overlay). Inside the
 /// workspace so the Codex sandbox can read them (decision D5).
 pub fn board_tmp_dir(folder: &Path) -> PathBuf {
@@ -94,6 +114,7 @@ pub fn board_tmp_dir(folder: &Path) -> PathBuf {
 pub fn ensure_board_sidecar(folder: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(board_sidecar_dir(folder))?;
     std::fs::create_dir_all(board_thumbs_dir(folder))?;
+    std::fs::create_dir_all(board_posters_dir(folder))?;
     std::fs::create_dir_all(board_tmp_dir(folder))?;
     std::fs::create_dir_all(board_sessions_dir(folder))?;
     Ok(())

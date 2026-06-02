@@ -77,7 +77,7 @@ fn snap_tier(longest: f64) -> f64 {
     2f64.powf(longest.log2().round()).clamp(TIER_MIN, TIER_MAX)
 }
 
-fn default_scale(a: &Asset) -> f64 {
+pub fn default_scale(a: &Asset) -> f64 {
     let m = a.width.max(a.height) as f64;
     if m <= 0.0 {
         1.0
@@ -301,6 +301,10 @@ mod tests {
             mime: "image/png".into(),
             created_at: 0,
             origin: Origin::Imported,
+            duration_ms: None,
+            fps: None,
+            has_audio: None,
+            poster_path: None,
         }
     }
 

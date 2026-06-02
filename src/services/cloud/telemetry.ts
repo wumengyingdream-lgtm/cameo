@@ -13,6 +13,7 @@
 
 import { CLOUD_ENABLED, appVersion, cloudFetch, getDeviceId, platformTag } from "./index";
 import { ipc } from "../../lib/ipc";
+import { useSettingsStore } from "../../store/settings";
 import type { AppConfig } from "../../types";
 
 function todayUtc(): string {
@@ -72,6 +73,31 @@ interface TrackEvent {
   app_version: string;
   client_timestamp: string;
   props?: Record<string, unknown>;
+}
+
+/**
+ * Fire-and-forget product event (Tier-1 `ai_turn_complete`, Tier-2 actions).
+ * Unlike `app_open` there is no per-day dedup — these fire per user action.
+ *
+ * Gated twice: compiled out of open-source builds (`CLOUD_ENABLED`) and skipped
+ * when the user opted out. Opt-out is read synchronously from the settings store
+ * (loaded at boot, well before any turn) so we avoid a disk read per event.
+ * Same privacy invariants as the rest of this module — callers MUST pass only
+ * coarse, non-PII props (never prompts, paths, image bytes, board names).
+ */
+export async function track(event: string, props?: Record<string, unknown>): Promise<void> {
+  if (!CLOUD_ENABLED) return;
+  if (useSettingsStore.getState().config.telemetry_opt_out) return;
+  await sendBatch([
+    {
+      event,
+      device_id: await getDeviceId(),
+      platform: platformTag(),
+      app_version: appVersion(),
+      client_timestamp: new Date().toISOString(),
+      props,
+    },
+  ]);
 }
 
 async function sendBatch(events: TrackEvent[]): Promise<void> {

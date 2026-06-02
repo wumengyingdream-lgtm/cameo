@@ -13,8 +13,9 @@ import {
 import type { Asset, Placement, PlacementUpdate, Shape, ShapeKind } from "../types";
 import { cameoUrl, ipc } from "../lib/ipc";
 import { loadAssetObjectUrl } from "../lib/asset-url";
+import { isVideoAsset, stillPathOf } from "../lib/media";
 
-export type Tool = "select" | "point" | "rect" | "ellipse" | "brush";
+export type Tool = "select" | "hand" | "point" | "rect" | "ellipse" | "brush";
 
 export interface SceneStats {
   fps: number;
@@ -31,6 +32,8 @@ export type CanvasContextTarget =
 export interface SceneCallbacks {
   onStats?: (s: SceneStats) => void;
   onSelectionChange?: (ids: string[]) => void;
+  /** Space held/released for transient pan → reflect the Hand tool in the UI. */
+  onSpacePanChange?: (active: boolean) => void;
   /** Native right-click on the canvas → show a custom context menu. */
   onContextMenu?: (t: CanvasContextTarget) => void;
   onCommitMoves?: (updates: PlacementUpdate[]) => void;
@@ -82,6 +85,12 @@ interface Node {
   noteLayer: Container;
   content: Sprite | null;
   assetId: string;
+  /** The still source this node's texture was loaded from (image path, or a
+   *  video's poster path). When it changes for the SAME assetId — e.g. a video
+   *  gains a poster after a post-install ffmpeg backfill — the node must rebuild
+   *  even though assetId didn't change. "" = nothing renderable yet (poster-less
+   *  video showing the placeholder). */
+  stillKey: string;
   w: number;
   h: number;
 }
@@ -109,6 +118,17 @@ interface SnapMatch {
   target: WorldBounds;
   line: number;
   sourceIndex: number;
+}
+
+/** Cached world→minimap projection so a click on the overview can be inverted
+ *  back to a world point. `rect` is the minimap's screen-space bounds. */
+interface MinimapTransform {
+  rect: Rectangle;
+  ox: number;
+  oy: number;
+  s: number;
+  minX: number;
+  minY: number;
 }
 
 const MIN_SCALE = 0.02;
@@ -140,6 +160,19 @@ function clamp(v: number, lo: number, hi: number): number {
 let shapeSeq = 0;
 const makeShapeId = (): string => `m${Date.now().toString(36)}${(shapeSeq++).toString(36)}`;
 
+/** The rebuild key for an asset's canvas node: the texture source it would load
+ *  (image path, or a video's poster — "" when nothing's renderable yet) PLUS the
+ *  intrinsic dimensions. setData rebuilds a node when this changes for the same
+ *  assetId, covering both: (a) a video gaining a poster after a post-install
+ *  ffmpeg backfill, and (b) ffprobe succeeding (real w/h) while poster
+ *  extraction still failed — dims change but posterPath stays null, so the
+ *  placeholder must still be re-sized off the old 480² nominal. */
+function stillKeyOf(asset: Asset | undefined): string {
+  if (!asset) return "";
+  const src = isVideoAsset(asset) ? (asset.posterPath ?? "") : asset.path;
+  return `${src}|${asset.width}x${asset.height}`;
+}
+
 /** Decode off the main thread and wrap as a PixiJS texture. */
 async function loadTexture(url: string): Promise<Texture> {
   const res = await fetch(url);
@@ -150,12 +183,16 @@ async function loadTexture(url: string): Promise<Texture> {
 }
 
 async function loadBoardTexture(boardId: string, asset: Asset): Promise<Texture> {
-  const url = cameoUrl(boardId, asset.path);
+  // Videos render their extracted poster frame as the canvas still; images
+  // render their own file. A poster is a JPEG, so fall back with that mime.
+  const stillPath = stillPathOf(asset);
+  const stillMime = isVideoAsset(asset) ? "image/jpeg" : asset.mime;
+  const url = cameoUrl(boardId, stillPath);
   try {
     return await loadTexture(url);
   } catch (err) {
-    void ipc.frontLog("warn", `protocol texture load failed ${asset.path}: ${err}; using IPC bytes`);
-    const objectUrl = await loadAssetObjectUrl(boardId, asset.path, asset.mime);
+    void ipc.frontLog("warn", `protocol texture load failed ${stillPath}: ${err}; using IPC bytes`);
+    const objectUrl = await loadAssetObjectUrl(boardId, stillPath, stillMime);
     try {
       return await loadTexture(objectUrl);
     } finally {
@@ -193,6 +230,14 @@ export class CanvasScene {
   private hoveredId: string | null = null;
   private tool: Tool = "select";
 
+  /** Whether a placement's backing asset is a video (annotation/crop are gated
+   *  off for time-based media — overlay-as-image is meaningless per-frame). */
+  private isVideoPlacement(id: string): boolean {
+    const p = this.placements.get(id);
+    const a = p && this.assets.get(p.assetId);
+    return !!a && a.mime.startsWith("video/");
+  }
+
   // Interaction state.
   private mode:
     | "idle"
@@ -203,7 +248,8 @@ export class CanvasScene {
     | "markdrag"
     | "resize"
     | "rotate"
-    | "crop" = "idle";
+    | "crop"
+    | "minimap" = "idle";
   private cropId: string | null = null;
   /** True while the in-place crop overlay is open — hides the transform chrome. */
   private cropActive = false;
@@ -258,6 +304,14 @@ export class CanvasScene {
   private statAccum = 0;
   private minimapAccum = 0;
   private minimapVisible = false;
+  // Screen-space geometry of the last-drawn minimap + the world→mini transform,
+  // so a click on the overview can be inverted back to a world point to recenter.
+  private minimapHit: MinimapTransform | null = null;
+  // Projection frozen at minimap pointer-down: the overview rescales itself to
+  // include the live viewport, so reusing the per-frame `minimapHit` mid-drag
+  // would feed camera moves back into the mapping (jitter). Holding the start
+  // transform keeps a held pointer pinned to one world point.
+  private minimapDrag: MinimapTransform | null = null;
   private destroyed = false;
   private inited = false;
   private canvasEl: HTMLCanvasElement | null = null;
@@ -324,8 +378,9 @@ export class CanvasScene {
     this.app.stage.addChild(this.marqueeGfx); // screen-space overlay
     this.snapGuideGfx.eventMode = "none";
     this.app.stage.addChild(this.snapGuideGfx); // screen-space alignment guides
-    this.minimapGfx.eventMode = "none";
-    this.app.stage.addChild(this.minimapGfx); // overview, bottom-right (screen space)
+    this.minimapGfx.eventMode = "none"; // toggled to "static" by drawMinimap when visible
+    this.minimapGfx.on("pointerdown", (e: FederatedPointerEvent) => this.onMinimapPointerDown(e));
+    this.app.stage.addChild(this.minimapGfx); // overview, bottom-left (screen space)
     this.app.stage.addChild(this.handleLayer); // transform handles — topmost
     this.createHandles();
 
@@ -386,8 +441,12 @@ export class CanvasScene {
     for (const p of placements.values()) {
       const existing = this.nodes.get(p.id);
       if (existing) {
-        if (existing.assetId !== p.assetId) {
-          // Asset swapped (e.g. crop bake / undo) — rebuild to load the new texture.
+        // Rebuild when the backing asset swapped (crop bake / undo) OR when the
+        // still source changed for the same asset — a video gaining a poster
+        // after a post-install ffmpeg backfill keeps assetId but flips stillKey
+        // from "" to the poster path (C3).
+        const nextStill = stillKeyOf(assets.get(p.assetId));
+        if (existing.assetId !== p.assetId || existing.stillKey !== nextStill) {
           this.destroyNode(existing);
           this.nodes.delete(p.id);
           if (this.hoveredId === p.id) this.hoveredId = null;
@@ -747,10 +806,15 @@ export class CanvasScene {
     this.zoomAt(s.cx, s.cy, direction === "in" ? ZOOM_STEP : 1 / ZOOM_STEP);
   }
 
-  /** Bottom-right overview: all placements + the current viewport rect. */
+  /** Bottom-left overview: all placements + the current viewport rect. */
   private drawMinimap(): void {
     const g = this.minimapGfx;
     g.clear();
+    // Disabled by default; re-enabled below once geometry is known, so clicks
+    // fall through to the canvas whenever the overview isn't on screen.
+    this.minimapHit = null;
+    this.minimapGfx.eventMode = "none";
+    this.minimapGfx.hitArea = null;
     if (!this.minimapVisible || this.nodes.size === 0) return;
     const vw = this.hostEl?.clientWidth || this.app.screen.width;
     const vh = this.hostEl?.clientHeight || this.app.screen.height;
@@ -787,6 +851,33 @@ export class CanvasScene {
     const [vx, vy] = toMini(tl.x, tl.y);
     const [vx2, vy2] = toMini(br.x, br.y);
     g.rect(vx, vy, vx2 - vx, vy2 - vy).stroke({ width: 1.5, color: 0x1a1a1c, alpha: 0.5 });
+    // Make the overview clickable: store its world→mini transform so a click can
+    // be inverted back to a world point, and recenter the camera there.
+    this.minimapHit = { rect: new Rectangle(mx, my, mW, mH), ox, oy, s, minX, minY };
+    this.minimapGfx.eventMode = "static";
+    this.minimapGfx.hitArea = this.minimapHit.rect;
+  }
+
+  private onMinimapPointerDown(e: FederatedPointerEvent): void {
+    if (e.button !== 0 || !this.minimapHit) return;
+    e.stopPropagation();
+    this.mode = "minimap";
+    this.minimapDrag = this.minimapHit; // freeze the projection for the drag
+    this.minimapNavTo(e.global.x, e.global.y);
+  }
+
+  /** Recenter the viewport on the world point under a (clamped) minimap click. */
+  private minimapNavTo(gx: number, gy: number): void {
+    const h = this.minimapDrag ?? this.minimapHit;
+    if (!h) return;
+    const cx = clamp(gx, h.rect.x, h.rect.x + h.rect.width);
+    const cy = clamp(gy, h.rect.y, h.rect.y + h.rect.height);
+    const worldX = h.minX + (cx - h.ox) / h.s;
+    const worldY = h.minY + (cy - h.oy) / h.s;
+    const safe = this.safeRect();
+    this.cam.x = safe.cx - worldX * this.cam.scale;
+    this.cam.y = safe.cy - worldY * this.cam.scale;
+    this.applyCamera();
   }
 
   // ── Node lifecycle ─────────────────────────────────────────────────────────
@@ -798,7 +889,7 @@ export class CanvasScene {
 
     const container = new Container();
     container.eventMode = "static";
-    container.cursor = this.spacePan ? "grab" : this.tool === "select" ? "move" : "crosshair";
+    container.cursor = this.spacePan || this.tool === "hand" ? "grab" : this.tool === "select" ? "move" : "crosshair";
 
     const placeholder = new Graphics();
     placeholder.rect(-w / 2, -h / 2, w, h).fill({ color: 0xe8e8ea });
@@ -813,7 +904,18 @@ export class CanvasScene {
     const outline = new Graphics();
     container.addChild(outline);
 
-    const node: Node = { container, placeholder, outline, anno, noteLayer, content: null, assetId: p.assetId, w, h };
+    const node: Node = {
+      container,
+      placeholder,
+      outline,
+      anno,
+      noteLayer,
+      content: null,
+      assetId: p.assetId,
+      stillKey: stillKeyOf(asset),
+      w,
+      h,
+    };
     container.on("pointerover", () => this.setHoveredNode(p.id));
     container.on("pointerout", () => this.setHoveredNode(null));
     container.on("pointerdown", (e: FederatedPointerEvent) => this.onNodePointerDown(p.id, e));
@@ -823,7 +925,10 @@ export class CanvasScene {
     this.placementLayer.addChild(container);
     this.nodes.set(p.id, node);
 
-    if (this.boardId && asset) {
+    // A video with no poster (ffmpeg was unavailable at mint) has nothing to
+    // raster — keep the placeholder until it's re-minted with a poster.
+    const renderable = asset && (!isVideoAsset(asset) || !!asset.posterPath);
+    if (this.boardId && asset && renderable) {
       loadBoardTexture(this.boardId, asset)
         .then((tex) => {
           const current = this.nodes.get(p.id);
@@ -918,6 +1023,13 @@ export class CanvasScene {
 
   setMinimapVisible(v: boolean): void {
     this.minimapVisible = v;
+    // Drop the click target immediately on hide; otherwise the stale hot zone
+    // stays live until the next throttled drawMinimap (~100ms).
+    if (!v) {
+      this.minimapHit = null;
+      this.minimapGfx.eventMode = "none";
+      this.minimapGfx.hitArea = null;
+    }
   }
 
   private refreshCursor(): void {
@@ -926,7 +1038,7 @@ export class CanvasScene {
       ? "grabbing"
       : this.cropActive
         ? "default"
-      : this.spacePan
+      : this.spacePan || this.tool === "hand"
         ? "grab"
         : this.cropId
           ? "crosshair"
@@ -938,13 +1050,13 @@ export class CanvasScene {
       ? "grabbing"
       : this.cropActive
         ? "default"
-        : this.spacePan
+        : this.spacePan || this.tool === "hand"
           ? "grab"
           : this.tool === "select"
             ? "move"
             : "crosshair";
     for (const n of this.nodes.values()) n.container.cursor = nodeCursor;
-    const handleCursor = panning ? "grabbing" : this.spacePan ? "grab" : null;
+    const handleCursor = panning ? "grabbing" : this.spacePan || this.tool === "hand" ? "grab" : null;
     for (let i = 0; i < this.cornerHandles.length; i++) {
       this.cornerHandles[i].cursor = handleCursor ?? HANDLE_CURSORS[i];
     }
@@ -1427,8 +1539,8 @@ export class CanvasScene {
   }
 
   private onHandleDown(kind: "resize" | "rotate", e: FederatedPointerEvent, handleIndex = 0): void {
-    if (e.button === 1 || (e.button === 0 && this.spacePan)) {
-      this.beginPan(e, e.button === 0);
+    if (e.button === 1 || (e.button === 0 && this.panOnLeftDrag)) {
+      this.beginPan(e, e.button === 0 && this.spacePan);
       return;
     }
     if (e.button !== 0) return;
@@ -1515,6 +1627,7 @@ export class CanvasScene {
     e.preventDefault();
     if (!this.spacePan) {
       this.spacePan = true;
+      this.cb.onSpacePanChange?.(true);
       this.refreshCursor();
     }
   };
@@ -1526,6 +1639,17 @@ export class CanvasScene {
 
   private onWindowBlur = (): void => {
     this.releaseSpacePan();
+    // Hand/middle-button pan and minimap drag aren't space-driven, so
+    // releaseSpacePan leaves them running. If the button is released while we're
+    // unfocused we never see the pointerup, so abort here to avoid coming back
+    // stuck mid-pan (mouse-move would then drag the canvas unexpectedly).
+    if (this.mode === "pan" || this.mode === "minimap") {
+      this.mode = "idle";
+      this.spacePanDrag = false;
+      this.minimapDrag = null;
+      this.moved = false;
+      this.refreshCursor();
+    }
   };
 
   private releaseSpacePan(): void {
@@ -1536,6 +1660,7 @@ export class CanvasScene {
       this.spacePanDrag = false;
       this.moved = false;
     }
+    if (wasSpacePan) this.cb.onSpacePanChange?.(false);
     if (wasSpacePan || this.mode === "idle") this.refreshCursor();
   }
 
@@ -1545,6 +1670,11 @@ export class CanvasScene {
 
   private pointerDistanceFrom(start: { x: number; y: number }, x: number, y: number): number {
     return Math.hypot(x - start.x, y - start.y);
+  }
+
+  /** Left-drag pans when Space is held (transient) or the Hand tool is active. */
+  private get panOnLeftDrag(): boolean {
+    return this.spacePan || this.tool === "hand";
   }
 
   private beginPan(e: FederatedPointerEvent, bySpace: boolean): void {
@@ -1602,8 +1732,8 @@ export class CanvasScene {
 
   private onNodePointerDown(id: string, e: FederatedPointerEvent): void {
     if (this.cropActive) return; // only the crop frame is interactive while cropping
-    if (e.button === 1 || (e.button === 0 && this.spacePan)) {
-      this.beginPan(e, e.button === 0);
+    if (e.button === 1 || (e.button === 0 && this.panOnLeftDrag)) {
+      this.beginPan(e, e.button === 0 && this.spacePan);
       return;
     }
     if (e.button !== 0) return;
@@ -1630,9 +1760,13 @@ export class CanvasScene {
       return;
     }
 
+    // Video placements aren't annotatable (overlay-as-image is per-frame
+    // meaningless) — fall through to plain select/move regardless of tool.
+    const annotatable = !this.isVideoPlacement(id);
+
     // Point mark (纯批注): a single click drops a numbered pin at the spot and
     // immediately opens its note box. No drag.
-    if (this.tool === "point") {
+    if (annotatable && this.tool === "point") {
       const node = this.nodes.get(id);
       if (!node) return;
       const local = node.container.toLocal(e.global);
@@ -1646,7 +1780,8 @@ export class CanvasScene {
     }
 
     // Region mark tool: drag out an annotation (rect/ellipse/brush) on this node.
-    if (this.tool !== "select") {
+    // (Hand left-drag already returned via beginPan above; exclude it for typing.)
+    if (annotatable && this.tool !== "select" && this.tool !== "hand") {
       const node = this.nodes.get(id);
       if (!node) return;
       this.mode = "annotate";
@@ -1684,8 +1819,8 @@ export class CanvasScene {
 
   private onStagePointerDown(e: FederatedPointerEvent): void {
     if (this.cropActive) return; // crop mode: ignore canvas marquee/deselect
-    if (e.button === 1 || (e.button === 0 && this.spacePan)) {
-      this.beginPan(e, e.button === 0);
+    if (e.button === 1 || (e.button === 0 && this.panOnLeftDrag)) {
+      this.beginPan(e, e.button === 0 && this.spacePan);
       return;
     }
     if (e.button !== 0) return;
@@ -1802,6 +1937,8 @@ export class CanvasScene {
         this.annoEndLocal = { x: local.x, y: local.y };
         this.drawCropRect(node, this.annoTemp);
       }
+    } else if (this.mode === "minimap") {
+      this.minimapNavTo(gx, gy);
     }
   }
 
@@ -1891,6 +2028,7 @@ export class CanvasScene {
     this.clearSnapGuides();
     this.mode = "idle";
     this.spacePanDrag = false;
+    this.minimapDrag = null;
     this.refreshCursor();
   }
 

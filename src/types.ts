@@ -9,7 +9,11 @@ export interface Rect {
 
 /** How an Asset entered the Board (mirrors Rust `Origin`). Drives the on-disk
  *  naming scheme; `imported` files keep their original filename. */
-export type AssetOrigin = "imported" | "generated" | "crop" | "paste";
+export type AssetOrigin = "imported" | "generated" | "crop" | "paste" | "frame";
+
+/** Image vs time-based media. Derived from `mime` (see lib/media.ts) — never
+ *  stored, so it can't go stale. */
+export type MediaKind = "image" | "video";
 
 export interface Asset {
   id: string; // blake3 hex of contents
@@ -19,6 +23,15 @@ export interface Asset {
   mime: string;
   createdAt: number;
   origin: AssetOrigin;
+  // ── Time-based media (video). Absent on images. ──
+  /** Duration in milliseconds (ffprobe). */
+  durationMs?: number;
+  /** Frame rate (ffprobe avg_frame_rate), for frame stepping. */
+  fps?: number;
+  /** Whether the video has an audio stream. */
+  hasAudio?: boolean;
+  /** Board-relative path to the extracted first-frame poster (the canvas still). */
+  posterPath?: string;
 }
 
 export interface Placement {
@@ -155,6 +168,16 @@ export interface CodexSkillInfo {
 export interface CodexSkillRef {
   name: string;
   path: string;
+}
+
+/** Status of the managed ffmpeg/ffprobe tools (mirrors Rust `FfmpegStatus`). */
+export interface FfmpegStatus {
+  /** "ready" | "missing" | "installing" | "failed" */
+  state: "ready" | "missing" | "installing" | "failed";
+  ffmpegPath: string | null;
+  ffprobePath: string | null;
+  version: string | null;
+  error: string | null;
 }
 
 // Mirrors src-tauri/src/runtime.rs UnifiedEvent (tag "kind", camelCase fields).

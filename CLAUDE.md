@@ -106,6 +106,8 @@
 | 生成档位 | model/effort/serviceTier 每轮 `turn/start` 显式下发 + per-Board 持久化（不回落用户 config.toml）；summary=auto / personality=friendly 固定默认 |
 | 时间线落盘 | **Rust runtime 权威写入** `.cameo/sessions/<id>.jsonl`（绑定 turn 的 session、不依赖前端聚焦），前端不再 best-effort append |
 | 网络代理 | 产品**所有**对外出口（Codex sidecar + cloud + gallery 图片 + 更新）统一走 `net::client` / env，不只是 agent |
+| 视频模态（v0.1.8）| **Codex × 确定性工具（ffmpeg）编辑视频**，不是接视频生成模型。和图像同形状：Codex 产出制品 + 非破坏 + 血缘。画布放/scrub/抽帧；引用走路径；crop/标注对视频禁用 |
+| ffmpeg 受管 | 探测用户自己的优先（同 Codex CLI 立场）；缺失才从 R2 manifest 静默下载到 `~/.cameo/bin`（blake3 pin），**不打包二进制** |
 | 协议 | AGPL-3.0 |
 
 ### 有人（包括未来的 AI）提议以下，请先 push back
@@ -113,7 +115,9 @@
 - "用结构化 mask API 替代 overlay" → 否，overlay-as-image 是 runtime 无关的关键。
 - "让 agent 无状态、用文档/状态机重建上下文" → 否，旧式 workflow 思维（产品方已否）。
 - "用 egui / Vello / 纯 Rust GPU 做画布" → 否，见 `specs/research/research_canvas_stack.md`。
-- "我们也编排多模型 / 自己接图像模型" → 否，能力交给 Codex，价值在前端空间 UX。
+- "我们也编排多模型 / 自己接图像模型 / 接视频生成模型" → 否，能力交给 Codex，价值在前端空间 UX。
+  （注意区分：**Codex 用 ffmpeg 这类确定性本机工具编辑视频是允许的**，v0.1.8 已做——那不是"接模型"，
+  和图像生成同形状。被否的是 Cameo 自己接**生成式模型**。）
 - "做 per-image chat / 工作流编排" → 否，per-Board 连续 session + 提供上下文。
 - "保证只改圈选区、其余像素不动" → 不承诺，生成式产出是全新整图。
 
@@ -167,6 +171,9 @@ pnpm tauri dev                  # 有 UI 改动时烟测
 - **OQ-5 预设清单细化**：去背景 / 扩图 / 胶片相机风滤镜（可批量套真人照）。
 - **OQ-6 文件夹↔画布同步语义**。
 - **OQ-D1 画布底色辨识度**：浅底 `#F5F5F7` 已上线，看用户反馈再决定要不要给浅色图加描边。
+- **视频模态（v0.1.8 已实现，commit `76a61f3`）** —— Codex×ffmpeg；细节见 `specs/prd/prd_0.1.8_video.md`。
+  **待 maintainer**：① 部署 R2 ffmpeg manifest（`publish_ffmpeg.sh`）——未部署前自动下载不可用，
+  只能用用户自备 PATH 的 ffmpeg；② GPL 源码托管 + H.264/HEVC 专利复核；③ 真 Windows 验证；④ GUI 烟测。
 
 **这些未定前不要擅自开工对应模块 —— 先问用户**。
 

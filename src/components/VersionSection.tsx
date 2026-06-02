@@ -59,10 +59,12 @@ export function VersionSection() {
 
   return (
     <section className="cm-set-section">
-      <h3 className="cm-set-section__title">{t("settings.about")}</h3>
-      <div className="cm-set-card">
-        <div className="cm-set-row">
-          <span className="cm-set-row__label">{t("settings.version")}</span>
+      <div className="cm-set-section__head">
+        <div className="cm-set-section__text">
+          <h3 className="cm-set-section__title">{t("settings.about")}</h3>
+          <p className="cm-set-section__desc">{t("settings.aboutDesc")}</p>
+        </div>
+        <div className="cm-set-section__control">
           <span className="cm-set-version">v{appVersion()}</span>
         </div>
       </div>

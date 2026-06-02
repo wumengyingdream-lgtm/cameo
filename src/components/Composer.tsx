@@ -6,6 +6,7 @@ import { useBoardStore } from "../store/board";
 import { useChatStore } from "../store/chat";
 import { useComposerStore } from "../store/composer";
 import { cameoUrl, ipc } from "../lib/ipc";
+import { stillPathOf } from "../lib/media";
 import { buildOverlays, buildMarkNotes, annotatedImages } from "../lib/overlay";
 import { GalleryButton } from "./gallery/GalleryButton";
 import { GenSettingsMenu } from "./GenSettingsMenu";
@@ -134,11 +135,14 @@ export function Composer() {
   const running = turnStatus === "running";
 
   // ── pill resolution ────────────────────────────────────────────────────
+  // `path` is the reference inlined into the sent text (the real file — a video
+  // stays its .mp4 so Codex reads/ffprobes it). `url` is just the pill's <img>
+  // thumbnail, so use the still (a video's poster) to avoid a broken-image pill.
   const resolve = (pid: string): { path: string; url: string } | null => {
     const { placements, assets, boardId } = useBoardStore.getState();
     const p = placements.get(pid);
     const a = p && assets.get(p.assetId);
-    return a && boardId ? { path: a.path, url: cameoUrl(boardId, a.path) } : null;
+    return a && boardId ? { path: a.path, url: cameoUrl(boardId, stillPathOf(a)) } : null;
   };
 
   const makePill = (pid: string, ghost: boolean): HTMLSpanElement => {

@@ -10,9 +10,34 @@ const IMAGE_EXTS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff", "avif",
 ];
 
+/// Video containers we treat as time-based media (decision: Codex × ffmpeg).
+const VIDEO_EXTS: &[&str] = &["mp4", "webm", "mov", "m4v"];
+
 pub fn is_image_ext(ext: &str) -> bool {
     IMAGE_EXTS.contains(&ext)
 }
+
+pub fn is_video_ext(ext: &str) -> bool {
+    VIDEO_EXTS.contains(&ext)
+}
+
+/// Any media (image or video) Cameo can place on the canvas.
+pub fn is_media_ext(ext: &str) -> bool {
+    is_image_ext(ext) || is_video_ext(ext)
+}
+
+fn ext_of(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default()
+}
+
+/// Placeholder square for a video whose real dimensions are unknown (ffmpeg
+/// missing / probe failed). Must match the frontend's `asset?.width || 480`
+/// fallback in scene.ts so layout and rendered size agree (W3). Also used by
+/// backfill to anchor legacy 0×0 placements on their displayed footprint.
+pub const NOMINAL_VIDEO_DIM: u32 = 480;
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -37,13 +62,51 @@ fn dims_from_bytes(bytes: &[u8]) -> (u32, u32) {
 }
 
 /// Mint an Asset for a file that already lives in the Board folder.
+///
+/// This is the single funnel for every importer (drag/drop, agent output,
+/// clipboard, reconcile), so media-type handling added here applies everywhere
+/// (pit of success). Video files are enriched via ffprobe (dims / duration /
+/// fps / audio) and get a poster frame extracted via ffmpeg; if ffmpeg isn't
+/// installed yet, the video still mints (poster-less, zero dims) and the UI
+/// offers to install it.
 pub fn mint_asset(folder: &Path, rel_path: &str, origin: Origin) -> Result<Asset> {
     let abs = folder.join(rel_path);
-    let bytes = std::fs::read(&abs).with_context(|| format!("read {}", abs.display()))?;
-    let (width, height) = dims_from_bytes(&bytes);
     let mime = mime_guess::from_path(&abs)
         .first_or_octet_stream()
         .to_string();
+
+    if mime.starts_with("video/") || is_video_ext(&ext_of(&abs)) {
+        let id = hash_file_hex(&abs)?;
+        let meta = crate::tools::ffmpeg::probe_video(&abs);
+        // When ffmpeg is missing (or ffprobe gave 0×0), fall back to a nominal
+        // square that matches the frontend's `asset?.width || 480` placeholder
+        // size (scene.ts) — otherwise Rust's footprint/flow_layout treats the
+        // tile as zero-size and stacks multiple poster-less videos on the same
+        // spot while the canvas draws 480px blocks that overlap (W3). A later
+        // backfill re-mints with the true dimensions.
+        let (width, height) = meta
+            .as_ref()
+            .map(|m| (m.width, m.height))
+            .filter(|&(w, h)| w > 0 && h > 0)
+            .unwrap_or((NOMINAL_VIDEO_DIM, NOMINAL_VIDEO_DIM));
+        let poster_path = extract_video_poster(folder, &abs, &id);
+        return Ok(Asset {
+            id,
+            path: rel_path.to_string(),
+            width,
+            height,
+            mime,
+            created_at: now_ms(),
+            origin,
+            duration_ms: meta.as_ref().and_then(|m| m.duration_ms),
+            fps: meta.as_ref().and_then(|m| m.fps),
+            has_audio: meta.as_ref().map(|m| m.has_audio),
+            poster_path,
+        });
+    }
+
+    let bytes = std::fs::read(&abs).with_context(|| format!("read {}", abs.display()))?;
+    let (width, height) = dims_from_bytes(&bytes);
     Ok(Asset {
         id: hash_hex(&bytes),
         path: rel_path.to_string(),
@@ -52,7 +115,28 @@ pub fn mint_asset(folder: &Path, rel_path: &str, origin: Origin) -> Result<Asset
         mime,
         created_at: now_ms(),
         origin,
+        duration_ms: None,
+        fps: None,
+        has_audio: None,
+        poster_path: None,
     })
+}
+
+/// Extract (or reuse) the first-frame poster for a video into the Board sidecar
+/// (`.cameo/posters/<hash>.jpg`). Returns the board-relative path, or `None`
+/// when ffmpeg is unavailable / extraction failed. Content-addressed by the
+/// video's hash so re-minting identical bytes reuses one poster.
+fn extract_video_poster(folder: &Path, video_abs: &Path, id: &str) -> Option<String> {
+    let rel = format!(".cameo/posters/{id}.jpg");
+    let out = folder.join(&rel);
+    if out.is_file() {
+        return Some(rel);
+    }
+    if crate::tools::ffmpeg::extract_poster(video_abs, &out) {
+        Some(rel)
+    } else {
+        None
+    }
 }
 
 /// Pick a non-colliding filename `<stem>.<ext>` (or `<stem>-N.<ext>`). Used for
@@ -83,11 +167,14 @@ fn timestamped_name(folder: &Path, stem: &str, ext: &str) -> String {
     name
 }
 
-fn image_ext_of(src: &Path) -> String {
+/// Destination extension for a copied media file: keep the source extension if
+/// it's a known image or video, else fall back to png (images dominate; a bogus
+/// ext shouldn't poison the filename).
+fn media_ext_of(src: &Path) -> String {
     src.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
-        .filter(|e| is_image_ext(e))
+        .filter(|e| is_media_ext(e))
         .unwrap_or_else(|| "png".to_string())
 }
 
@@ -100,7 +187,7 @@ pub fn import_external(folder: &Path, src: &Path, existing: &[Asset]) -> Result<
     if let Some(a) = existing.iter().find(|a| a.id == id) {
         return Ok(a.clone());
     }
-    let ext = image_ext_of(src);
+    let ext = media_ext_of(src);
     let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
     let rel = unique_name(folder, stem, &ext);
     std::fs::write(folder.join(&rel), &bytes)
@@ -117,7 +204,7 @@ pub fn import_generated_file(folder: &Path, src: &Path, existing: &[Asset]) -> R
     if let Some(a) = existing.iter().find(|a| a.id == id) {
         return Ok(a.clone());
     }
-    let ext = image_ext_of(src);
+    let ext = media_ext_of(src);
     let rel = timestamped_name(folder, "gen", &ext);
     std::fs::write(folder.join(&rel), &bytes)
         .with_context(|| format!("write {}", folder.join(&rel).display()))?;
@@ -160,7 +247,9 @@ pub fn sweep_overlays(folder: &Path) {
     }
 }
 
-/// Top-level image files in the folder (skips hidden / `.cameo`). Relative names.
+/// Top-level media files (images + videos) in the folder (skips hidden /
+/// `.cameo`). Relative names. Drives folder↔board reconciliation, so videos
+/// dropped into the folder appear on the canvas just like images.
 pub fn scan_images(folder: &Path) -> Vec<String> {
     let mut out = Vec::new();
     if let Ok(rd) = std::fs::read_dir(folder) {
@@ -174,12 +263,12 @@ pub fn scan_images(folder: &Path) -> Vec<String> {
             if name.starts_with('.') {
                 continue;
             }
-            let is_img = p
+            let is_media = p
                 .extension()
                 .and_then(|x| x.to_str())
-                .map(|x| is_image_ext(&x.to_lowercase()))
+                .map(|x| is_media_ext(&x.to_lowercase()))
                 .unwrap_or(false);
-            if is_img {
+            if is_media {
                 out.push(name.to_string());
             }
         }

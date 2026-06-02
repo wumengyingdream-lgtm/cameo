@@ -396,6 +396,193 @@ pub fn replace_placement_image(
     })
 }
 
+/// Extract a still frame from a video Placement: mint a new image Asset from the
+/// PNG `bytes` (captured client-side from the `<video>` element) and place it
+/// right-of-source with lineage back to the video (`parent_id` = the video
+/// placement). The bridge that lets a video frame re-enter the image edit /
+/// annotation / lineage pipeline — same shape as a generated output.
+#[tauri::command]
+pub fn extract_frame(
+    board_id: String,
+    placement_id: String,
+    bytes: Vec<u8>,
+    registry: State<Arc<BoardRegistry>>,
+) -> Result<ImportResult, String> {
+    let entry = registry.get(&board_id).ok_or("unknown board")?;
+    let assets_snapshot = entry.doc.lock().assets.clone();
+    let asset = assets::import_bytes(
+        &entry.folder,
+        &bytes,
+        "png",
+        "frame",
+        Origin::Frame,
+        &assets_snapshot,
+    )
+    .map_err(e2s)?;
+
+    with_doc_save(&entry, |doc| {
+        let mut out = ImportResult {
+            assets: Vec::new(),
+            placements: Vec::new(),
+        };
+        if !doc.assets.iter().any(|a| a.id == asset.id) {
+            doc.assets.push(asset.clone());
+            out.assets.push(asset.clone());
+        }
+        // Anchor right-of-source like a generated output (lineage in parent_id).
+        let source = doc
+            .placements
+            .iter()
+            .find(|p| p.id == placement_id)
+            .cloned()
+            .and_then(|p| {
+                doc.assets
+                    .iter()
+                    .find(|a| a.id == p.asset_id)
+                    .cloned()
+                    .map(|a| (p, a))
+            });
+        // Stack below any prior outputs of this source so a second extracted
+        // frame (or generation) doesn't land on top of the first.
+        let output_index = doc
+            .placements
+            .iter()
+            .filter(|p| p.parent_id.as_deref() == Some(placement_id.as_str()))
+            .count() as i64;
+        let placement = board::make_derived_placement(
+            &asset,
+            source.as_ref().map(|(p, a)| (p, a)),
+            output_index,
+            doc,
+        );
+        doc.placements.push(placement.clone());
+        out.placements.push(placement);
+        Ok(out)
+    })
+}
+
+/// Backfill video metadata + posters for assets minted while ffmpeg was
+/// unavailable (poster-less). Called after a successful ffmpeg install so the
+/// canvas swaps placeholder tiles for real poster stills without a reopen
+/// (PRD §6.3). Returns the changed Assets AND any placements re-tiered from the
+/// nominal placeholder size, so the frontend mirror updates both. No-op when
+/// ffmpeg is still missing or there's nothing to backfill.
+#[tauri::command]
+pub fn backfill_video_posters(
+    board_id: String,
+    registry: State<Arc<BoardRegistry>>,
+) -> Result<ImportResult, String> {
+    let empty = || ImportResult {
+        assets: Vec::new(),
+        placements: Vec::new(),
+    };
+    let entry = registry.get(&board_id).ok_or("unknown board")?;
+    if crate::tools::ffmpeg::resolved().is_none() {
+        return Ok(empty());
+    }
+    // Snapshot candidates (videos with no poster) without holding the lock for IO.
+    let candidates: Vec<Asset> = {
+        let doc = entry.doc.lock();
+        doc.assets
+            .iter()
+            .filter(|a| a.mime.starts_with("video/") && a.poster_path.is_none())
+            .cloned()
+            .collect()
+    };
+    if candidates.is_empty() {
+        return Ok(empty());
+    }
+
+    // Re-mint each (ffprobe + poster) outside the lock — mint_asset is the single
+    // funnel that enriches video metadata, so this stays consistent with import.
+    let mut updated: Vec<Asset> = Vec::new();
+    for old in &candidates {
+        match assets::mint_asset(&entry.folder, &old.path, old.origin) {
+            Ok(fresh) if fresh.poster_path.is_some() => updated.push(fresh),
+            Ok(_) => {} // still no poster (extraction failed) — leave as-is
+            Err(e) => tracing::warn!(module = "commands", "backfill {} failed: {e}", old.path),
+        }
+    }
+    if updated.is_empty() {
+        return Ok(empty());
+    }
+
+    let changed_placements = with_doc_save(&entry, |doc| {
+        let mut changed: Vec<Placement> = Vec::new();
+        for u in &updated {
+            // Capture the pre-update dimensions to compute the placeholder scale
+            // a placement would have had — so we only re-tier placements the user
+            // hasn't manually resized.
+            let old_dims = doc
+                .assets
+                .iter()
+                .find(|a| a.id == u.id)
+                .map(|a| (a.width, a.height));
+            if let Some(a) = doc.assets.iter_mut().find(|a| a.id == u.id) {
+                a.width = u.width;
+                a.height = u.height;
+                a.duration_ms = u.duration_ms;
+                a.fps = u.fps;
+                a.has_audio = u.has_audio;
+                a.poster_path = u.poster_path.clone();
+            }
+            // A poster-less video was placed against placeholder dimensions
+            // (the nominal 480² of W3, or 0×0 on legacy boards). Now that its
+            // real dimensions are known, every placement must adjust so the
+            // canvas isn't wrong after `scene.ts` rebuilds the node on the
+            // dimension change ([P2]):
+            //   - Untouched (still at the placeholder default scale) → re-tier to
+            //     the real video's display tier (a 4K clip lands at its tier, not
+            //     a multi-thousand-px slab).
+            //   - User-resized → PRESERVE the displayed footprint they chose, so
+            //     the same on-screen size is kept against the new real dimensions
+            //     instead of ballooning.
+            // Top-left position is preserved in both cases.
+            if let Some((ow, oh)) = old_dims {
+                // Displayed placeholder dims: a legacy 0×0 video was still drawn
+                // at the frontend's `width||480` fallback, so anchor on NOMINAL.
+                let disp_w = if ow > 0 { ow } else { assets::NOMINAL_VIDEO_DIM } as f64;
+                let disp_h = if oh > 0 { oh } else { assets::NOMINAL_VIDEO_DIM } as f64;
+                let placeholder = Asset { width: ow, height: oh, ..u.clone() };
+                let old_default = board::default_scale(&placeholder); // 0×0 → 1.0
+                let new_default = board::default_scale(u);
+                let new_longest = u.width.max(u.height) as f64;
+                for p in doc.placements.iter_mut().filter(|p| p.asset_id == u.id) {
+                    let is_default = (p.scale - old_default).abs() < f64::EPSILON;
+                    let new_scale = if is_default {
+                        new_default
+                    } else if new_longest > 0.0 {
+                        // Keep the displayed longest side the user chose.
+                        (disp_w.max(disp_h) * p.scale) / new_longest
+                    } else {
+                        p.scale
+                    };
+                    if (new_scale - p.scale).abs() < f64::EPSILON
+                        && (disp_w - u.width as f64).abs() < f64::EPSILON
+                        && (disp_h - u.height as f64).abs() < f64::EPSILON
+                    {
+                        continue; // nothing actually changed
+                    }
+                    // Anchor top-left as the footprint changes.
+                    let old_w = disp_w * p.scale;
+                    let old_h = disp_h * p.scale;
+                    let new_w = u.width as f64 * new_scale;
+                    let new_h = u.height as f64 * new_scale;
+                    p.x += (new_w - old_w) / 2.0;
+                    p.y += (new_h - old_h) / 2.0;
+                    p.scale = new_scale;
+                    changed.push(p.clone());
+                }
+            }
+        }
+        Ok(changed)
+    })?;
+    Ok(ImportResult {
+        assets: updated,
+        placements: changed_placements,
+    })
+}
+
 // ── Export (v0.0.2) ──────────────────────────────────────────────────────────
 
 /// Resolve a placement → its backing asset's absolute file path, guarding
@@ -445,6 +632,19 @@ fn asset_rel_abs_path(entry: &BoardEntry, rel: &str) -> Result<PathBuf, String> 
 
 fn board_doc_asset_abs_path(entry: &BoardEntry, rel: &str) -> Result<PathBuf, String> {
     let rel_path = board_safe_rel_path(rel)?;
+    // A video's canvas still is its extracted poster under `.cameo/posters/`,
+    // which is NOT a tracked Asset (it lives in the sidecar). The frontend's
+    // texture-byte fallback (`readAssetBytes(boardId, stillPath)`, used when the
+    // cameo:// protocol load fails) asks for that poster path, so allow it here
+    // — the traversal guard above already confines `rel` to the board folder
+    // (W4). Everything else must be a tracked image/video asset.
+    let is_poster = matches!(
+        (rel_path.parent().and_then(|p| p.to_str()), rel_path.extension().and_then(|e| e.to_str())),
+        (Some(".cameo/posters"), Some("jpg"))
+    );
+    if is_poster {
+        return asset_rel_abs_path(entry, rel);
+    }
     let asset_path = {
         let doc = entry.doc.lock();
         let asset = doc
@@ -452,8 +652,8 @@ fn board_doc_asset_abs_path(entry: &BoardEntry, rel: &str) -> Result<PathBuf, St
             .iter()
             .find(|a| Path::new(&a.path) == rel_path.as_path())
             .ok_or("asset not found")?;
-        if !asset.mime.starts_with("image/") {
-            return Err("asset is not an image".into());
+        if !asset.mime.starts_with("image/") && !asset.mime.starts_with("video/") {
+            return Err("asset is not a supported media file".into());
         }
         asset.path.clone()
     };
@@ -507,6 +707,26 @@ pub fn copy_image(
     Ok(())
 }
 
+// ── Managed tools (ffmpeg) ──────────────────────────────────────────────────
+//
+// ffmpeg/ffprobe back the video modality (Codex edits videos via ffmpeg; the
+// canvas probes/poster-extracts via ffprobe/ffmpeg). Detect the user's own
+// install first; if missing, download a pinned build into ~/.cameo/bin. See
+// src-tauri/src/tools/ffmpeg.rs.
+
+/// Current ffmpeg status (ready / missing / installing / failed) for the UI.
+#[tauri::command]
+pub fn tool_status() -> crate::tools::ffmpeg::FfmpegStatus {
+    crate::tools::ffmpeg::status()
+}
+
+/// Download + verify ffmpeg/ffprobe into ~/.cameo/bin. Progress arrives via
+/// `ffmpeg:progress`; terminal state via `ffmpeg:done` / `ffmpeg:failed`.
+#[tauri::command]
+pub async fn tool_install(app: AppHandle) -> Result<(), String> {
+    crate::tools::ffmpeg::install(app).await
+}
+
 // ── Chat-text-embedded image references ─────────────────────────────────────
 //
 // When the AI's reply mentions an image path (markdown, Windows absolute path,
@@ -527,6 +747,9 @@ pub struct ChatImageResolution {
     /// we may want to surface "this looks like an image path but the file
     /// is missing" diagnostics.)
     is_image: bool,
+    /// Media classification of a usable result: "image" | "video". Lets the
+    /// chat renderer pick `<img>` vs `<video>`. Empty when unusable.
+    media_kind: String,
     /// True when `abs_path` is inside the board's workspace folder.
     in_workspace: bool,
     /// Relative to the workspace folder, when `in_workspace`. The UI uses
@@ -578,14 +801,22 @@ pub fn resolve_chat_image(
     };
     let canonical = std::fs::canonicalize(&abs).unwrap_or(abs);
 
+    let ext = canonical
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
     let exists = canonical.is_file();
-    let is_image = is_image_extension(&canonical);
+    let is_image = assets::is_image_ext(&ext);
+    let is_video = assets::is_video_ext(&ext);
+    let is_media = is_image || is_video;
 
-    if !exists || !is_image {
+    if !exists || !is_media {
         return Ok(ChatImageResolution {
             abs_path: canonical.to_string_lossy().to_string(),
             exists,
             is_image,
+            media_kind: String::new(),
             in_workspace: false,
             workspace_rel_path: None,
             thumb_data_url: None,
@@ -594,12 +825,13 @@ pub fn resolve_chat_image(
                 if !exists {
                     "file not found"
                 } else {
-                    "not an image"
+                    "not a supported media file"
                 }
                 .to_string(),
             ),
         });
     }
+    let media_kind = if is_video { "video" } else { "image" };
 
     let canonical_workspace =
         std::fs::canonicalize(&entry.folder).unwrap_or_else(|_| entry.folder.clone());
@@ -624,8 +856,9 @@ pub fn resolve_chat_image(
     // Out-of-workspace images can't be loaded through the Cameo image protocol
     // (which is scoped to one board folder); inline them as a base64 thumbnail
     // instead. JS caches the result so the cost is paid once per unique path
-    // per session.
-    let thumb_data_url = if !in_workspace {
+    // per session. Videos skip this (no cheap still without ffmpeg writing a
+    // file); the renderer shows a generic chip until they're added to the board.
+    let thumb_data_url = if !in_workspace && is_image {
         match build_thumb_data_url(&canonical) {
             Ok(url) => Some(url),
             Err(e) => {
@@ -644,7 +877,8 @@ pub fn resolve_chat_image(
     Ok(ChatImageResolution {
         abs_path: canonical.to_string_lossy().to_string(),
         exists: true,
-        is_image: true,
+        is_image,
+        media_kind: media_kind.to_string(),
         in_workspace,
         workspace_rel_path,
         thumb_data_url,
@@ -704,16 +938,6 @@ fn path_to_url_rel(path: &Path) -> String {
         }
     }
     parts.join("/")
-}
-
-fn is_image_extension(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_ascii_lowercase())
-            .as_deref(),
-        Some("png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "avif")
-    )
 }
 
 fn build_thumb_data_url(path: &Path) -> anyhow::Result<String> {

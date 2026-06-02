@@ -5,6 +5,7 @@ import { useBoardStore } from "../store/board";
 import { useComposerStore } from "../store/composer";
 import { cameoUrl, ipc } from "../lib/ipc";
 import { useAssetObjectUrl } from "../lib/asset-url";
+import { ChatInlineVideo } from "./ChatInlineVideo";
 import { useT } from "../i18n/locale";
 
 /**
@@ -90,6 +91,11 @@ export function ChatInlineImage({ path }: { path: string }) {
   }
 
   if (!res) return null;
+  // A video resolution renders as an inline <video> (its own component); this
+  // one stays the single chat-media entry point so the call site is unchanged.
+  if (res.mediaKind === "video") {
+    return <ChatInlineVideo res={res} basename={basename} />;
+  }
   const workspaceProtocolThumb =
     res.inWorkspace && boardId && res.workspaceRelPath ? cameoUrl(boardId, res.workspaceRelPath) : "";
   const thumbSrc = res.inWorkspace ? workspaceAssetThumb ?? workspaceProtocolThumb : res.thumbDataUrl ?? "";

@@ -30,6 +30,7 @@
   /* ── primitives · functional ──────────────────────────────────────────── */
   --cm-success: #22c55e;
   --cm-success-bg: #ecfdf3;
+  --cm-success-text: #15803d; /* readable green for text on white/gray (AA), mirrors --cm-accent-text */
   --cm-warning: #f59e0b;
   --cm-warning-bg: #fef6e7;
   --cm-danger: #dc2626;
@@ -2626,7 +2627,7 @@ body.cm-chat-resizing {
 }
 .cm-modal {
   width: 100%;
-  max-width: 460px;
+  max-width: 480px;
   max-height: 100%;
   display: flex;
   flex-direction: column;
@@ -2640,8 +2641,7 @@ body.cm-chat-resizing {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--cm-divider);
+  padding: 20px 24px 6px;
 }
 .cm-modal__title {
   margin: 0;
@@ -2668,24 +2668,40 @@ body.cm-chat-resizing {
   color: var(--cm-fg);
 }
 .cm-modal__body {
-  padding: 24px;
+  /* scrollbar-gutter:stable always reserves the scrollbar track, so toggling a
+     section open/closed never shifts the layout horizontally. The 10px gutter
+     lands on the right; padding-right 14 + 10 = 24 matches the 24 on the left. */
+  padding: 4px 14px 22px 24px;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
+  scrollbar-gutter: stable;
 }
+/* Editorial sections: title + description on the left, control on the right,
+   separated by hairline dividers — no grouping cards. */
 .cm-set-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: block;
+  padding: 20px 0;
+  border-top: 1px solid var(--cm-divider);
 }
-/* Section head: title + (optional) master toggle on the same row. */
+.cm-set-section:first-child {
+  border-top: 0;
+  padding-top: 8px;
+}
 .cm-set-section__head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  min-height: 24px;
+  gap: 20px;
+}
+.cm-set-section__text {
+  min-width: 0;
+}
+/* Right-side control slot (select / toggle / status chip + button / version). */
+.cm-set-section__control {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 1px;
 }
 .cm-set-section__title {
   margin: 0;
@@ -2695,10 +2711,77 @@ body.cm-chat-resizing {
   color: var(--cm-fg);
 }
 .cm-set-section__desc {
-  margin: 0;
+  margin: 6px 0 0;
+  max-width: 320px;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
   color: var(--cm-muted);
+}
+/* ffmpeg version banner shown in the desc slot when ready. */
+.cm-set-section__desc--mono {
+  font-family: var(--cm-font-mono);
+  font-size: 12px;
+  color: var(--cm-fg-secondary);
+}
+/* Proxy detail block: protocol · host : port on one line, status underneath. */
+.cm-set-proxy {
+  margin-top: 16px;
+  padding: 0 16px;
+  background: var(--cm-gray-50);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+}
+.cm-set-proxy__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0;
+}
+.cm-set-proxy__row .cm-input--host {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+.cm-set-proxy__status {
+  padding: 13px 0;
+  border-top: 1px solid var(--cm-divider);
+}
+.cm-select--proto {
+  width: auto;
+  min-width: 92px;
+}
+/* Status chip (ffmpeg readiness): pill + leading dot, tinted by tone. */
+.cm-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 11px;
+  border-radius: var(--cm-radius-pill);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+.cm-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+}
+.cm-status--ok {
+  background: var(--cm-success-bg);
+  color: var(--cm-success-text);
+}
+.cm-status--idle {
+  background: var(--cm-info-bg);
+  color: var(--cm-info);
+}
+.cm-status--err {
+  background: var(--cm-danger-bg);
+  color: var(--cm-danger);
 }
 /* Grouping card for a section's controls (one or more rows). */
 .cm-set-card {
@@ -2761,7 +2844,7 @@ body.cm-chat-resizing {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 2px;
+  margin-top: 16px;
 }
 /* Inline download progress — occupies the same slot as the check button. */
 .cm-progress {
@@ -2806,26 +2889,23 @@ body.cm-chat-resizing {
   color: var(--cm-fg-secondary);
   white-space: nowrap;
 }
+/* Inline connectivity line inside the proxy block — icon + colored text, no
+   filled chip (the surrounding gray block already groups it). */
 .cm-set-probe {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: 7px;
   margin: 0;
-  padding: 8px 10px;
-  border-radius: var(--cm-radius-md);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 .cm-set-probe--checking {
-  background: var(--cm-info-bg);
   color: var(--cm-info);
 }
 .cm-set-probe--ok {
-  background: var(--cm-success-bg);
-  color: var(--cm-success);
+  color: var(--cm-success-text);
 }
 .cm-set-probe--error {
-  background: var(--cm-danger-bg);
   color: var(--cm-danger);
 }
 .cm-set-probe__icon {
@@ -3718,4 +3798,80 @@ body.cm-chat-resizing {
   padding: 48px;
   text-align: center;
   color: var(--cm-fg-secondary);
+}
+
+/* On-canvas video player (VideoOverlay). The scene positions the root to the
+   focused video's image rect each frame; the <video> is pointer-events:none so
+   canvas drag/select pass through it, and only the control bar captures pointer
+   (DESIGN.md — mirrors the selection-bar surface/border/shadow language). */
+.cm-vidip {
+  position: absolute;
+  z-index: 30;
+  pointer-events: none;
+}
+.cm-vidip__area {
+  position: absolute;
+  inset: 0;
+  transform: rotate(var(--cm-vid-rotation, 0rad));
+  transform-origin: center center;
+  overflow: hidden;
+}
+.cm-vidip__video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+}
+.cm-vidip__bar {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 10px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-border);
+  border-radius: var(--cm-radius-md);
+  box-shadow: var(--cm-shadow-lg);
+  pointer-events: auto;
+  white-space: nowrap;
+}
+.cm-vidip__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--cm-radius-sm);
+  background: transparent;
+  color: var(--cm-ink);
+  cursor: pointer;
+}
+.cm-vidip__btn:hover {
+  background: var(--cm-accent-soft);
+}
+.cm-vidip__btn--accent {
+  color: var(--cm-accent);
+}
+.cm-vidip__scrub {
+  width: 150px;
+  accent-color: var(--cm-accent);
+  cursor: pointer;
+}
+.cm-vidip__time {
+  min-width: 76px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cm-ink-muted);
+}
+
+/* ffmpeg install error line — red accent doubles as the error color in the
+   light+red design system (no dedicated danger token). */
+.cm-set-rowsub--error {
+  color: var(--cm-accent);
 }

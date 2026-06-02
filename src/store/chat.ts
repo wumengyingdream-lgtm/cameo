@@ -3,6 +3,8 @@ import type { CodexEvent, SessionMeta } from "../types";
 import { ipc, type ChatImageResolution } from "../lib/ipc";
 import { useBoardStore } from "./board";
 import { useSettingsStore } from "./settings";
+import { useGenStore } from "./genSettings";
+import { beginTurn, endTurn, noteImage, noteUsage } from "../services/cloud/turnMetrics";
 import { InactivityWatchdog } from "../lib/watchdog";
 
 // ── runtime stability ───────────────────────────────────────────────────────
@@ -242,6 +244,12 @@ function forceRestartSession(
   reason: string,
   opts: { autoRestart?: boolean } = { autoRestart: true },
 ): Partial<ChatState> {
+  // Settle per-turn telemetry for the in-flight turn before we tear it down.
+  // This is the common funnel for watchdog timeout / Stop-no-response /
+  // sessionComplete-while-running — none of which emit turnComplete/error, so
+  // without this the turn's metric would be silently dropped. endTurn is
+  // idempotent (no-ops when no turn is active), so a non-mid-turn restart is safe.
+  endTurn("aborted", reason);
   const autoRestart = opts.autoRestart ?? true;
   const boardId = useBoardStore.getState().boardId;
   const { messages } = st;
@@ -316,7 +324,10 @@ function failLocalTurn(st: ChatState, reason: string, scope?: TurnScope): Partia
   nextMessages[targetIndex] = failedAsst;
   const isLatestAssistant = !messages.slice(targetIndex + 1).some((m) => m.role === "assistant");
 
-  if (isLatestAssistant) watchdog.stop();
+  if (isLatestAssistant) {
+    watchdog.stop();
+    endTurn("error", reason); // settle the metric for a turn that never reached Codex
+  }
 
   // No persistence here: a turn that never reached Codex has no authoritative
   // record to write (Rust owns the timeline). The failure is shown live.
@@ -449,6 +460,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // event will touch() it; absent any event for WATCHDOG_TIMEOUT_MS we'll
     // force-restart the session (see forceRestartSession + watchdog.onFire).
     watchdog.start();
+    // Begin per-turn telemetry (Tier-1 ai_turn_complete). startTurn is the single
+    // send funnel (composer + presets both pass here), so every query is measured.
+    // model/effort/tier come from the per-Board gen settings sent with this turn.
+    const gen = useGenStore.getState();
+    beginTurn({ model: gen.model, effort: gen.effort, serviceTier: gen.serviceTier, hasRefs: refs.length > 0 });
     // Bump stopEpoch so any in-flight escalation timer from a prior Stop click
     // gets invalidated — it must NOT fire its tree-kill against THIS new turn.
     stopEpoch++;
@@ -513,6 +529,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // their own case body. New event kinds added in the future must opt in
     // here AND, if terminal, call `watchdog.stop()` in the case body.
     if (PROGRESS_EVENT_KINDS.has(e.kind)) watchdog.touch();
+    // Per-turn telemetry taps (side effects, kept out of the pure set() updater).
+    // endTurn is idempotent, so a turnComplete followed by a stray error won't
+    // double-count. See services/cloud/turnMetrics.ts.
+    if (e.kind === "imageGenerated") noteImage();
+    else if (e.kind === "usage") noteUsage(e.inputTokens, e.outputTokens);
+    else if (e.kind === "turnComplete") endTurn(e.status, e.error);
+    else if (e.kind === "error") endTurn("error", e.message);
     set((st) => {
       switch (e.kind) {
         case "sessionInit":
@@ -771,7 +794,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       .then((res) => {
         set((s) => {
           const next = new Map(s.imageResolutions);
-          next.set(path, res.exists && res.isImage ? res : "missing");
+          // Accept any usable media (image OR video — the resolver tags
+          // mediaKind); only mark missing when the file truly isn't there or
+          // isn't supported.
+          const usable = res.exists && res.mediaKind !== "";
+          next.set(path, usable ? res : "missing");
           return { imageResolutions: next };
         });
       })

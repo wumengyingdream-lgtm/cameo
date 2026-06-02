@@ -4,6 +4,22 @@
 // NOT here — it's always English (lib/imageActions, lib/overlay).
 
 export const en = {
+  // Video (canvas player + ffmpeg managed tool)
+  "vid.play": "Play",
+  "vid.pause": "Pause",
+  "vid.mute": "Mute",
+  "vid.unmute": "Unmute",
+  "vid.prevFrame": "Previous frame",
+  "vid.nextFrame": "Next frame",
+  "vid.extractFrame": "Extract frame",
+  "ffmpeg.title": "Video tools (ffmpeg)",
+  "ffmpeg.desc": "Required to play, scrub, and edit video.",
+  "ffmpeg.ready": "Ready",
+  "ffmpeg.missing": "Not installed",
+  "ffmpeg.installing": "Installing…",
+  "ffmpeg.failed": "Install failed",
+  "ffmpeg.install": "Install",
+
   // Topbar
   "topbar.workspaces": "Workspaces",
   "topbar.aiPanel": "AI panel",
@@ -13,7 +29,8 @@ export const en = {
   "topbar.images_one": "{count} image",
 
   // Toolbar (tooltips) + mark tool
-  "tool.select": "Select",
+  "tool.select": "Select (V)",
+  "tool.hand": "Hand · drag to pan (H, or hold Space)",
   "tool.mark": "Mark",
   "tool.markType": "Mark type",
   "tool.addImage": "Add images",
@@ -169,6 +186,7 @@ export const en = {
   "settings.title": "Settings",
   "settings.general": "General",
   "settings.language": "Language",
+  "settings.languageDesc": "Cameo's interface language — follow the system or pick one.",
   "settings.language.system": "System default",
   "settings.proxy": "Network proxy",
   "settings.proxyDesc": "Injected into the Codex session so model requests go through it. Changes apply live and restart the current session.",
@@ -208,6 +226,7 @@ export const en = {
   "settings.resetDeviceConfirm": "Reset device ID? The next launch will get a new identity.",
   "settings.resetDeviceDone": "Done — takes effect next launch.",
   "settings.about": "About",
+  "settings.aboutDesc": "Check for and install the latest version, or view the full changelog.",
   "settings.version": "Version",
 
   // Gallery — prompt inspiration overlay
@@ -254,6 +273,21 @@ export const en = {
 export type MsgKey = keyof typeof en;
 
 export const zh: Record<MsgKey, string> = {
+  // Video
+  "vid.play": "播放",
+  "vid.pause": "暂停",
+  "vid.mute": "静音",
+  "vid.unmute": "取消静音",
+  "vid.prevFrame": "上一帧",
+  "vid.nextFrame": "下一帧",
+  "vid.extractFrame": "提取此帧",
+  "ffmpeg.title": "视频工具 (ffmpeg)",
+  "ffmpeg.desc": "播放、拖动进度和编辑视频所需。",
+  "ffmpeg.ready": "已就绪",
+  "ffmpeg.missing": "未安装",
+  "ffmpeg.installing": "安装中…",
+  "ffmpeg.failed": "安装失败",
+  "ffmpeg.install": "安装",
   "topbar.workspaces": "工作区",
   "topbar.aiPanel": "AI 面板",
   "topbar.settings": "设置",
@@ -261,7 +295,8 @@ export const zh: Record<MsgKey, string> = {
   "topbar.images": "{count} 张图片",
   "topbar.images_one": "{count} 张图片",
 
-  "tool.select": "选择",
+  "tool.select": "选择（V）",
+  "tool.hand": "抓手 · 拖动平移（H，或按住空格）",
   "tool.mark": "批注",
   "tool.markType": "批注类型",
   "tool.addImage": "添加图片",
@@ -405,6 +440,7 @@ export const zh: Record<MsgKey, string> = {
   "settings.title": "设置",
   "settings.general": "通用",
   "settings.language": "语言",
+  "settings.languageDesc": "Cameo 界面语言，跟随系统或手动指定。",
   "settings.language.system": "跟随系统",
   "settings.proxy": "网络代理",
   "settings.proxyDesc": "注入到 Codex 会话进程，让模型请求走代理。更改后实时生效，会自动重启当前会话。",
@@ -443,6 +479,7 @@ export const zh: Record<MsgKey, string> = {
   "settings.resetDeviceConfirm": "重置设备 ID？下次启动会换一个新身份。",
   "settings.resetDeviceDone": "已重置 — 下次启动生效。",
   "settings.about": "关于",
+  "settings.aboutDesc": "检查并安装最新版本，或查看完整更新记录。",
   "settings.version": "版本",
 
   "gallery.button": "Gallery",

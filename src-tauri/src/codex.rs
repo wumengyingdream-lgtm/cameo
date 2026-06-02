@@ -162,7 +162,7 @@ fn push_windows_fallback_paths(parts: &mut Vec<PathBuf>) {
     }
 }
 
-fn build_augmented_path(include_shell_path: bool) -> String {
+pub(crate) fn build_augmented_path(include_shell_path: bool) -> String {
     #[cfg(windows)]
     let _ = include_shell_path;
     let mut parts: Vec<PathBuf> = Vec::new();
@@ -179,6 +179,13 @@ fn build_augmented_path(include_shell_path: bool) -> String {
     push_unix_fallback_paths(&mut parts);
     #[cfg(windows)]
     push_windows_fallback_paths(&mut parts);
+    // Managed tools (ffmpeg/ffprobe Cameo downloaded) are the LAST resort — both
+    // Cameo's own resolver and the Codex sidecar prefer the user's own install
+    // (detect-first, decision E1 / review §4); the managed copy only kicks in
+    // when nothing else on PATH provides the tool. Codex's lookup of its OTHER
+    // tools is unaffected — this only adds one trailing dir, changing nothing
+    // about precedence for anything already on the user's PATH.
+    push_unique(&mut parts, crate::tools::bin_dir());
 
     std::env::join_paths(&parts)
         .map(|s| s.to_string_lossy().into_owned())
@@ -969,6 +976,11 @@ pub async fn start_session(
     }
     let folder = board_reg.folder(&board_id).ok_or("unknown board")?;
     let codex = resolve_codex()?;
+
+    // Link Cameo's enabled bundled skills into <folder>/.agents/skills/ BEFORE the
+    // sidecar spawns here — the app-server scans its cwd on startup, so the skills
+    // surface as repo-scope (ambiently available + in the `/` menu). Best-effort.
+    crate::skills::ensure_workspace_skills(&folder);
 
     let mut cmd = tokio::process::Command::new(&codex.path);
     crate::process::hide_tokio_console_window(&mut cmd);

@@ -53,3 +53,14 @@ export function useT() {
     return s;
   };
 }
+
+/** Non-reactive translate for imperative (non-component) callers — stores,
+ *  toasts. Reads the current resolved language once; does not subscribe. */
+export function getMessage(key: MsgKey, params?: Record<string, string | number>): string {
+  const lang = useLocaleStore.getState().lang;
+  let s: string = messages[lang][key] ?? messages.en[key] ?? key;
+  if (params) {
+    for (const k in params) s = s.split(`{${k}}`).join(String(params[k]));
+  }
+  return s;
+}

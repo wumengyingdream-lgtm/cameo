@@ -7,7 +7,9 @@ import { useWorkspaceStore } from "../store/workspace";
 import { ipc } from "../lib/ipc";
 import { SelectionBar } from "../components/SelectionBar";
 import { CropOverlay } from "../components/CropOverlay";
+import { VideoOverlay } from "./VideoOverlay";
 import { CanvasContextMenu } from "../components/CanvasContextMenu";
+import { isVideoAsset } from "../lib/media";
 import { useT } from "../i18n/locale";
 import { useFileImport } from "../lib/useFileImport";
 
@@ -24,6 +26,7 @@ export function CameoCanvas() {
   const sceneRef = useRef<CanvasScene | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const cropRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLDivElement>(null);
   const [ctxMenu, setCtxMenu] = useState<CanvasContextTarget | null>(null);
   const chatOpen = useUiStore((s) => s.chatOpen);
   const chatWidth = useUiStore((s) => s.chatWidth);
@@ -54,6 +57,7 @@ export function CameoCanvas() {
     void scene.init(host, {
       onStats: (s) => alive && useUiStore.getState().setStats(s),
       onSelectionChange: (ids) => alive && useBoardStore.getState().setSelection(ids),
+      onSpacePanChange: (active) => alive && useUiStore.getState().setSpaceHand(active),
       onCommitMoves: (u) => alive && void useBoardStore.getState().commitMoves(u),
       onAnnotate: (id, shapes) => alive && useBoardStore.getState().setAnnotation(id, shapes),
       onRename: (id, name) => alive && void useBoardStore.getState().renameAsset(id, name),
@@ -61,7 +65,27 @@ export function CameoCanvas() {
       onSelRect: (rect) => {
         const bar = barRef.current;
         const crop = cropRef.current;
+        const video = videoRef.current;
         const cropping = useUiStore.getState().cropping;
+        // On-canvas video player tracks the focused video's image area. Only a
+        // single video selection (and not while cropping) gets the live <video>;
+        // the scene drives its rect every frame, React owns content.
+        if (video) {
+          const bs = useBoardStore.getState();
+          const selId = bs.selection.size === 1 ? [...bs.selection][0] : null;
+          const p = selId ? bs.placements.get(selId) : null;
+          const a = p ? bs.assets.get(p.assetId) ?? null : null;
+          if (rect && !cropping && isVideoAsset(a)) {
+            video.style.display = "block";
+            video.style.left = `${rect.imageX}px`;
+            video.style.top = `${rect.imageY}px`;
+            video.style.width = `${rect.imageW}px`;
+            video.style.height = `${rect.imageH}px`;
+            video.style.setProperty("--cm-vid-rotation", `${rect.rotation}rad`);
+          } else {
+            video.style.display = "none";
+          }
+        }
         if (bar) {
           if (rect && !cropping) {
             bar.style.display = "flex";
@@ -205,6 +229,8 @@ export function CameoCanvas() {
         }
       } else if (e.key === "v" || e.key === "V") {
         useUiStore.getState().setTool("select");
+      } else if (e.key === "h" || e.key === "H") {
+        useUiStore.getState().setTool("hand");
       } else if (e.key === "r" || e.key === "R") {
         useUiStore.getState().setTool("rect");
       }
@@ -233,6 +259,7 @@ export function CameoCanvas() {
       <div ref={hostRef} className="cm-canvas-host" />
       <SelectionBar rootRef={barRef} />
       <CropOverlay rootRef={cropRef} />
+      <VideoOverlay rootRef={videoRef} />
       <CanvasContextMenu
         menu={ctxMenu}
         onClose={() => setCtxMenu(null)}

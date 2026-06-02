@@ -5,6 +5,7 @@ import { useBoardStore } from "../store/board";
 import { useChatStore } from "../store/chat";
 import { useUiStore } from "../store/ui";
 import { ipc } from "../lib/ipc";
+import { isVideoAsset } from "../lib/media";
 import { PRESET_REMOVE_BG, PRESET_UPSCALE, runImagePreset, exportImages } from "../lib/imageActions";
 import { useT } from "../i18n/locale";
 
@@ -63,9 +64,16 @@ export function CanvasContextMenu({
 
   if (menu.kind === "image") {
     const pid = menu.placementId;
+    // Image-only actions (remove-bg / upscale / crop / copy-image / export) are
+    // pixel/overlay-as-image ops with no per-frame meaning for video — and
+    // copy_image/bakeCrop would try to image::open(.mp4) and fail. Gate them off
+    // for a video placement, matching SelectionBar (W1). Reveal + delete remain.
+    const placement = board.placements.get(pid);
+    const asset = placement ? board.assets.get(placement.assetId) : undefined;
+    const isVideo = isVideoAsset(asset);
     return (
       <div className="cm-ctx" style={style} onPointerDown={(e) => e.stopPropagation()}>
-        {!multiSelectImage && (
+        {!multiSelectImage && !isVideo && (
           <>
             <button className="cm-ctx__item" disabled={!ready} onClick={act(() => boardId && runImagePreset(boardId, pid, PRESET_REMOVE_BG))}>
               <Eraser size={14} />
@@ -82,18 +90,22 @@ export function CanvasContextMenu({
             <div className="cm-ctx__sep" />
           </>
         )}
-        <button className="cm-ctx__item" onClick={act(() => boardId && void ipc.copyImage(boardId, pid))}>
-          <Copy size={14} />
-          {t("img.copy")}
-        </button>
+        {!isVideo && (
+          <button className="cm-ctx__item" onClick={act(() => boardId && void ipc.copyImage(boardId, pid))}>
+            <Copy size={14} />
+            {t("img.copy")}
+          </button>
+        )}
         <button className="cm-ctx__item" onClick={act(() => boardId && void ipc.revealInFinder(boardId, pid))}>
           <FolderOpen size={14} />
           {t("img.reveal")}
         </button>
-        <button className="cm-ctx__item" onClick={act(() => boardId && void exportImages(boardId, exportIds))}>
-          <Download size={14} />
-          {multiSelectImage ? t("img.exportSelected", { count: exportIds.length }) : t("img.export")}
-        </button>
+        {!isVideo && (
+          <button className="cm-ctx__item" onClick={act(() => boardId && void exportImages(boardId, exportIds))}>
+            <Download size={14} />
+            {multiSelectImage ? t("img.exportSelected", { count: exportIds.length }) : t("img.export")}
+          </button>
+        )}
         <div className="cm-ctx__sep" />
         <button className="cm-ctx__item cm-ctx__item--danger" onClick={act(() => void useBoardStore.getState().deleteSelected())}>
           <Trash2 size={14} />

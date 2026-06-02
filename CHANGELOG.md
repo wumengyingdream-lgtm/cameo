@@ -3,6 +3,27 @@
 User-facing release notes for Cameo. This file describes what changed from a
 user's point of view, rather than listing internal implementation details.
 
+## [0.1.8] - 2026-06-02
+
+### Improvements
+
+- **Video on the canvas**: drop in a video, scrub it, pull out frames, and ask
+  Codex to edit it with ffmpeg — trim a clip, change format or codec, and more —
+  right alongside your images. Just like images, every edit is non-destructive:
+  each result is a new clip with its lineage kept, so your original is never
+  touched. Cameo uses the ffmpeg you already have, or quietly fetches a managed
+  copy when it's missing.
+- **Faster ways around the canvas**: a new Hand tool, hold **Space** to pan, and
+  a clickable **minimap** to jump across large boards.
+- **Codex skills come built in**: Cameo now bundles a set of Codex skills and
+  makes them available in each board's workspace automatically — no setup needed
+  before you `/`-pick one from the input box.
+- **A cleaner Settings panel**: redesigned for a calmer, more consistent
+  layout — the proxy collapses to a single line, and the video-tools and version
+  sections read more clearly.
+
+---
+
 ## [0.1.7] - 2026-05-31
 
 ### Improvements

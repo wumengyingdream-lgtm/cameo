@@ -22,7 +22,9 @@ pub mod protocol;
 pub mod proxy;
 pub mod runtime;
 pub mod session;
+pub mod skills;
 pub mod storage;
+pub mod tools;
 pub mod tray;
 pub mod workspace;
 
@@ -38,6 +40,8 @@ pub fn run() {
     // file sink from flushing (see logging::init).
     let _log_guard = logging::init();
     tracing::info!(module = "lib", "Cameo starting");
+    tools::ffmpeg::sweep_bin_temps(); // clear orphaned download temps from a prior crash
+    skills::seed_bundled(); // materialize bundled Codex skills into ~/.cameo/skills
 
     let boards: Arc<BoardRegistry> = Arc::new(BoardRegistry::default());
     let codex_reg: Arc<CodexRegistry> = Arc::new(CodexRegistry::default());
@@ -96,6 +100,8 @@ pub fn run() {
             updater::check_pending_update,
             updater::install_pending_update,
             commands::open_logs_dir,
+            commands::tool_status,
+            commands::tool_install,
             commands::read_clipboard_image,
             commands::detect_codex,
             commands::probe_codex_auth,
@@ -116,6 +122,8 @@ pub fn run() {
             commands::delete_placements,
             commands::restore_placements,
             commands::replace_placement_image,
+            commands::extract_frame,
+            commands::backfill_video_posters,
             commands::reveal_in_finder,
             commands::copy_image,
             commands::export_asset,
