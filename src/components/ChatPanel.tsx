@@ -243,7 +243,13 @@ function TodoFloat() {
   );
 }
 
-function NetworkWarning({ onOpenSettings }: { onOpenSettings: () => void }) {
+function NetworkWarning({
+  onOpenSettings,
+  onDismiss,
+}: {
+  onOpenSettings: () => void;
+  onDismiss: () => void;
+}) {
   const t = useT();
   return (
     <div className="cm-netwarn" role="status">
@@ -251,6 +257,15 @@ function NetworkWarning({ onOpenSettings }: { onOpenSettings: () => void }) {
       <span className="cm-netwarn__text">{t("chat.networkBlocked")}</span>
       <button type="button" className="cm-netwarn__link" onClick={onOpenSettings}>
         {t("chat.networkProxyLink")}
+      </button>
+      <button
+        type="button"
+        className="cm-netwarn__close"
+        title={t("chat.networkDismiss")}
+        aria-label={t("chat.networkDismiss")}
+        onClick={onDismiss}
+      >
+        <X size={13} />
       </button>
     </div>
   );
@@ -803,6 +818,7 @@ export function ChatPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   const setChatWidth = useUiStore((s) => s.setChatWidth);
   const restartNonce = useSettingsStore((s) => s.restartNonce);
   const [networkBlocked, setNetworkBlocked] = useState(false);
+  const [networkWarnDismissed, setNetworkWarnDismissed] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const cleanupResizeRef = useRef<(() => void) | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
@@ -818,12 +834,14 @@ export function ChatPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
     if (sessionStatus === "starting") {
       networkProbeGenerationRef.current += 1;
       setNetworkBlocked(false);
+      setNetworkWarnDismissed(false);
       return;
     }
 
     const generation = networkProbeGenerationRef.current + 1;
     networkProbeGenerationRef.current = generation;
     setNetworkBlocked(false);
+    setNetworkWarnDismissed(false);
 
     const timer = window.setTimeout(() => {
       void ipc
@@ -931,7 +949,12 @@ export function ChatPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
       <div className="cm-chat__bottom">
         <TodoFloat />
         <MarkStaging />
-        {networkBlocked && <NetworkWarning onOpenSettings={onOpenSettings} />}
+        {networkBlocked && !networkWarnDismissed && (
+          <NetworkWarning
+            onOpenSettings={onOpenSettings}
+            onDismiss={() => setNetworkWarnDismissed(true)}
+          />
+        )}
         <Composer />
       </div>
     </div>

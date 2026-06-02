@@ -67,9 +67,6 @@ const PROGRESS_EVENT_KINDS = new Set<CodexEvent["kind"]>([
 
 export type SessionStatus = "idle" | "starting" | "ready" | "error";
 export type TurnStatus = "idle" | "running";
-export type TransportStatus =
-  | { phase: "reconnecting"; attempt: number | null; max: number | null; message: string }
-  | { phase: "fallback"; message: string };
 
 /** An assistant message is an ORDERED stream of blocks (Riff model): they are
  *  appended in arrival order so the UI renders think → tool → text → think → …
@@ -119,8 +116,6 @@ export interface TurnScope {
 interface ChatState {
   sessionStatus: SessionStatus;
   turnStatus: TurnStatus;
-  /** Recoverable Codex transport notices for the current turn. */
-  transportStatus: TransportStatus | null;
   messages: ChatMessage[];
   error: string | null;
   /** The agent's current plan/todo (turn/plan/updated). */
@@ -279,7 +274,6 @@ function forceRestartSession(
 
   return {
     turnStatus: "idle",
-    transportStatus: null,
     messages: updateLast(messages, (m) => {
       const settled = settle(m);
       const withNote =
@@ -334,7 +328,6 @@ function failLocalTurn(st: ChatState, reason: string, scope?: TurnScope): Partia
 
   return {
     turnStatus: isLatestAssistant ? "idle" : st.turnStatus,
-    transportStatus: isLatestAssistant ? null : st.transportStatus,
     error: isLatestAssistant ? reason : st.error,
     messages: nextMessages,
   };
@@ -420,7 +413,6 @@ const watchdog = new InactivityWatchdog({
 export const useChatStore = create<ChatState>((set, get) => ({
   sessionStatus: "idle",
   turnStatus: "idle",
-  transportStatus: null,
   messages: [],
   error: null,
   plan: null,
@@ -436,7 +428,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       sessionStatus: "idle",
       turnStatus: "idle",
-      transportStatus: null,
       messages: [],
       error: null,
       plan: null,
@@ -453,7 +444,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const asstMsg: ChatMessage = { id: newId(), role: "assistant", blocks: [], status: "streaming" };
     set((st) => ({
       turnStatus: "running",
-      transportStatus: null,
       messages: [...(st.turnStatus === "running" ? closeOpenAssistant(st.messages) : st.messages), userMsg, asstMsg],
     }));
     // Arm the inactivity watchdog for this turn. Every subsequent runtime
@@ -638,7 +628,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
           watchdog.stop();
           return {
             turnStatus: "idle",
-            transportStatus: null,
             messages: updateLast(st.messages, (m) => ({
               ...settle(m),
               status: e.status === "completed" ? "done" : "error",
@@ -651,7 +640,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
           watchdog.stop();
           return {
             turnStatus: "idle",
-            transportStatus: null,
             error: e.message,
             messages: updateLast(st.messages, (m) => ({ ...settle(m), status: "error", error: e.message })),
           };
@@ -666,19 +654,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
               secondaryResetsAt: e.secondaryResetsAt,
               reached: e.reached,
             },
-          };
-        case "transportStatus":
-          if (st.turnStatus !== "running") return {};
-          return {
-            transportStatus:
-              e.phase === "reconnecting"
-                ? {
-                    phase: "reconnecting",
-                    attempt: e.attempt ?? null,
-                    max: e.max ?? null,
-                    message: e.message,
-                  }
-                : { phase: "fallback", message: e.message },
           };
         case "log":
           // Surface warnings/errors as an inline note block in the stream.
@@ -707,11 +682,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
               return {
                 sessionStatus: "error",
                 turnStatus: "idle",
-                transportStatus: null,
                 error: message,
               };
             }
-            return { sessionStatus: "starting", turnStatus: "idle", transportStatus: null, error: null };
+            return { sessionStatus: "starting", turnStatus: "idle", error: null };
           }
           if (shouldBreakRestartLoop()) {
             const message =

@@ -22,6 +22,17 @@ user's point of view, rather than listing internal implementation details.
   layout — the proxy collapses to a single line, and the video-tools and version
   sections read more clearly.
 
+### Fixes
+
+- **Steadier connections behind a local proxy**: Codex's live model stream is no
+  longer forced through your HTTP proxy, where a long-lived connection could be
+  dropped mid-response and set off a "connection unstable — reconnecting…" loop.
+  The stream now connects directly (your system VPN / TUN routes it when
+  present) and quietly falls back to HTTPS when it can't, so a turn just runs to
+  the end.
+- **Dismissible network notice**: the "network check failed — Codex may need a
+  proxy" banner can now be closed.
+
 ---
 
 ## [0.1.7] - 2026-05-31

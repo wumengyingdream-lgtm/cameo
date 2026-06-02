@@ -8,14 +8,19 @@
 //!
 //! 1. Inject **both casings** of HTTP_PROXY / HTTPS_PROXY / NO_PROXY — different
 //!    HTTP stacks (reqwest, curl, openssl) read different ones.
-//! 2. When ENABLED, set `ALL_PROXY` to the SAME url as HTTP(S)_PROXY. Codex
-//!    streams model responses over a WebSocket (`wss://`), and WS transports in
-//!    many stacks ignore HTTP(S)_PROXY and only honor ALL_PROXY — so without it
-//!    the HTTPS handshake is proxied (works) but the stream goes direct and gets
-//!    dropped ("websocket closed by server before response.completed"). Setting
-//!    ALL_PROXY to the same value can't shadow HTTP(S)_PROXY (they match), so
-//!    we get full coverage without the stale-value footgun. When DISABLED we
-//!    strip inherited proxy env so the setting and the sidecar path agree.
+//! 2. Do **not** set `ALL_PROXY`, and strip any inherited one. Codex streams
+//!    model responses over a WebSocket (`wss://`) whose proxy is governed by
+//!    ALL_PROXY / WSS_PROXY — NOT HTTP(S)_PROXY. Forcing that long-lived,
+//!    bidirectional stream through a local HTTP CONNECT proxy (e.g. a Clash /
+//!    Mihomo mixed port) is fragile: the tunnel drops mid-stream ("Broken pipe"),
+//!    kicking off Codex's "Reconnecting 1/5..5/5" loop before it gives up and
+//!    falls back to HTTPS. So we proxy ONLY HTTP(S) and leave the wss stream
+//!    alone — Codex tries wss directly (a system-level TUN / VPN transparently
+//!    routes it when present) and, when it can't, auto-falls-back to its HTTPS
+//!    transport, which IS proxied via HTTPS_PROXY. Net: full coverage, no broken
+//!    stream. We still `env_remove` ALL_PROXY so an inherited value (Tauri
+//!    launched from a shell that exported it) can't shadow HTTP(S)_PROXY. When
+//!    DISABLED we strip all proxy env so the setting and the sidecar path agree.
 //! 3. Always inject `NO_PROXY=localhost,...` — even when disabled — so local
 //!    IPC never routes through a system proxy.
 //! 4. Fail-safe on invalid config: strip all proxy env rather than leaving a
@@ -47,8 +52,8 @@ const PROBE_USER_AGENT: &str = "Cameo-Proxy-Probe/1.0";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProxySettings {
     pub enabled: bool,
-    /// "http" | "socks5". The configured proxy is used for HTTP, HTTPS, and WSS
-    /// traffic via HTTP(S)_PROXY + ALL_PROXY env vars.
+    /// "http" | "socks5". Applied to HTTP/HTTPS traffic via HTTP(S)_PROXY. The
+    /// wss model stream is intentionally left unproxied (see invariant 2).
     pub protocol: String,
     pub host: String,
     pub port: u16,
@@ -125,13 +130,14 @@ pub fn apply_to_subprocess(cmd: &mut tokio::process::Command, cfg: Option<&Proxy
                 cmd.env("HTTPS_PROXY", &url);
                 cmd.env("http_proxy", &url);
                 cmd.env("https_proxy", &url);
-                // ALL_PROXY (same url) so the wss model stream is proxied too —
-                // see invariant 2. Safe to set since it matches HTTP(S)_PROXY.
-                cmd.env("ALL_PROXY", &url);
-                cmd.env("all_proxy", &url);
+                // Deliberately NOT ALL_PROXY — and strip any inherited one — so the
+                // wss model stream is never forced through the local CONNECT proxy
+                // (which drops the long-lived stream). See invariant 2.
+                cmd.env_remove("ALL_PROXY");
+                cmd.env_remove("all_proxy");
                 cmd.env("NO_PROXY", LOCALHOST_NO_PROXY);
                 cmd.env("no_proxy", LOCALHOST_NO_PROXY);
-                tracing::info!(module = "proxy", proxy_url = %url, "proxy injected into codex sidecar env (incl. ALL_PROXY for wss stream)");
+                tracing::info!(module = "proxy", proxy_url = %url, "proxy injected into codex sidecar env (HTTP/HTTPS only; wss left direct)");
             }
             Err(e) => {
                 tracing::warn!(
