@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useT } from "../i18n/locale";
 import { useBoardStore } from "../store/board";
 import { useChatStore } from "../store/chat";
-import { useComposerStore } from "../store/composer";
+import { useComposerStore, type PendingFrameRef } from "../store/composer";
 import { cameoUrl, ipc } from "../lib/ipc";
 import { stillPathOf } from "../lib/media";
 import { buildOverlays, buildMarkNotes, annotatedImages } from "../lib/overlay";
@@ -145,12 +145,19 @@ export function Composer() {
     return a && boardId ? { path: a.path, url: cameoUrl(boardId, stillPathOf(a)) } : null;
   };
 
-  const makePill = (pid: string, ghost: boolean): HTMLSpanElement => {
+  const makePill = (pid: string, ghost: boolean, frame?: PendingFrameRef): HTMLSpanElement => {
     const span = document.createElement("span");
     span.className = "cm-pill" + (ghost ? " cm-pill--ghost" : "");
     span.contentEditable = "false";
     span.dataset.pid = pid;
     if (ghost) span.dataset.ghost = "1";
+    // A frame reference carries the extracted still + timestamp so `extract`
+    // can point the agent at that exact moment (PRD §17/F2).
+    if (frame) {
+      span.dataset.frame = frame.path;
+      span.dataset.label = frame.label;
+      span.dataset.atms = String(frame.atMs);
+    }
     const r = resolve(pid);
     if (r) {
       const img = document.createElement("img");
@@ -162,6 +169,12 @@ export function Composer() {
     label.className = "cm-pill__label";
     label.textContent = r ? stem(r.path) : t("composer.imagePill");
     span.appendChild(label);
+    if (frame) {
+      const ts = document.createElement("span");
+      ts.className = "cm-pill__ts";
+      ts.textContent = frame.label;
+      span.appendChild(ts);
+    }
     return span;
   };
 
@@ -517,7 +530,9 @@ export function Composer() {
     const cd = e.clipboardData;
     if (!cd) return;
 
-    const item = [...(cd.items ?? [])].find((it) => it.type.startsWith("image/"));
+    const item = [...(cd.items ?? [])].find(
+      (it) => it.type.startsWith("image/") || it.type.startsWith("video/"),
+    );
     if (item) {
       e.preventDefault();
       e.stopPropagation();
@@ -632,7 +647,17 @@ export function Composer() {
           if (pid) {
             refs.push(pid);
             const r = resolve(pid);
-            text += r ? ` ${r.path} ` : " ";
+            const framePath = el.dataset.frame;
+            const label = el.dataset.label;
+            if (framePath && r) {
+              // Frame reference: point the agent at the exact still plus the
+              // source video + timestamp (it can read the still AND ffmpeg the
+              // video). The video path itself is also listed in the reference
+              // block build_turn_prompt prepends (Rust side).
+              text += ` (the frame at ${label ?? ""} of ${r.path}, saved as an image at ${framePath} — read it to see exactly what I mean) `;
+            } else {
+              text += r ? ` ${r.path} ` : " ";
+            }
           }
         } else if (el.tagName === "BR") {
           text += "\n";
@@ -736,7 +761,7 @@ export function Composer() {
       // shape as makePill, plus contentEditable=false so backspace deletes
       // it as one atom.
       editor.focus();
-      const pill = makePill(pendingPill, false);
+      const pill = makePill(pendingPill.placementId, false, pendingPill.frame);
       // Move caret to end, then insert the pill + a trailing space so the
       // user can immediately keep typing.
       const range = document.createRange();

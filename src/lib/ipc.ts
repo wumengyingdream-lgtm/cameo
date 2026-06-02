@@ -8,6 +8,7 @@ import type {
   FfmpegStatus,
   Asset,
   BoardInfo,
+  ClipItem,
   GenSettings,
   ImportResult,
   ModelInfo,
@@ -58,6 +59,12 @@ export const ipc = {
   importImageBytes: (boardId: string, bytes: number[], ext: string, stem: string) =>
     invoke<ImportResult>("import_image_bytes", { boardId, bytes, ext, stem }),
 
+  /** Paste in-app clipboard items into `boardId` (re-imports by source path, so
+   *  it works across boards and for videos). `sourceBoardId` resolves the items'
+   *  relative paths and decides whether to cascade-offset (same-board paste). */
+  pasteIntoBoard: (boardId: string, sourceBoardId: string | null, items: ClipItem[]) =>
+    invoke<ImportResult>("paste_into_board", { boardId, sourceBoardId, items }),
+
   readAssetBytes: (boardId: string, relPath: string) =>
     invoke<number[]>("read_asset_bytes", { boardId, relPath }),
 
@@ -82,6 +89,13 @@ export const ipc = {
    *  the video with lineage. `bytes` is a PNG captured from the <video>. */
   extractFrame: (boardId: string, placementId: string, bytes: number[]) =>
     invoke<ImportResult>("extract_frame", { boardId, placementId, bytes }),
+
+  /** Extract the frame at `atSeconds` of a video placement to a hidden Board-root
+   *  temp; returns its board-relative path. Backs the "reference" button's
+   *  frame-reference (the agent reads this still). Rejects if not a video or
+   *  ffmpeg is unavailable. */
+  referenceVideoFrame: (boardId: string, placementId: string, atSeconds: number) =>
+    invoke<string>("reference_video_frame", { boardId, placementId, atSeconds }),
 
   /** After an ffmpeg install, backfill posters + metadata for videos minted
    *  while it was missing. Returns the changed Assets + any placements re-tiered

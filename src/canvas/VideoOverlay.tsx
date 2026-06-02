@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Play, Pause, Volume2, VolumeX, ChevronLeft, ChevronRight, ImagePlus } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Play, Pause, Volume2, VolumeX, ImagePlus } from "lucide-react";
 import { useBoardStore } from "../store/board";
 import { useUiStore } from "../store/ui";
+import { useVideoPlaybackStore } from "../store/videoPlayback";
 import { cameoUrl, ipc } from "../lib/ipc";
 import { isVideoAsset } from "../lib/media";
 import { useT } from "../i18n/locale";
@@ -12,7 +13,7 @@ import { useT } from "../i18n/locale";
  * tracks pan/zoom/drag — React only owns the content. Shown for a single video
  * selection that isn't being cropped.
  *
- * Design (PRD §6.5, decision E2):
+ * Design (PRD §6.5, decision E2; controls per §17/F4):
  *  - The `<video>` is `pointer-events: none`, so canvas drag/select/delete keep
  *    working *through* it (the poster sprite underneath is the hit target). The
  *    control bar alone captures pointer.
@@ -21,6 +22,10 @@ import { useT } from "../i18n/locale";
  *    pipelines (avoids the SP-3 perf cliff).
  *  - Scrub seeks the `cameo://` source, which serves HTTP Range (206) — without
  *    that the element refuses to seek. crossOrigin lets extractFrame read pixels.
+ *  - The bar is play/pause + a drag scrubber (live frame preview, stays where
+ *    released) + time + mute + extract-frame. It registers play/pause + scrub
+ *    state into the video-playback store so spacebar and the "reference" button
+ *    can drive / read the focused video.
  */
 export function VideoOverlay({ rootRef }: { rootRef: RefObject<HTMLDivElement | null> }) {
   const selection = useBoardStore((s) => s.selection);
@@ -31,6 +36,7 @@ export function VideoOverlay({ rootRef }: { rootRef: RefObject<HTMLDivElement | 
   const t = useT();
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const scrubRef = useRef<HTMLDivElement>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
   const [cur, setCur] = useState(0);
@@ -47,7 +53,14 @@ export function VideoOverlay({ rootRef }: { rootRef: RefObject<HTMLDivElement | 
     () => (show && boardId && asset ? cameoUrl(boardId, asset.path) : ""),
     [show, boardId, asset],
   );
-  const fps = asset?.fps && asset.fps > 0 ? asset.fps : 30;
+
+  // togglePlay only reads the stable videoRef, so it's safe to register once.
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) void v.play();
+    else v.pause();
+  }, []);
 
   // Reset transient playback state when the selected video changes.
   useEffect(() => {
@@ -56,30 +69,41 @@ export function VideoOverlay({ rootRef }: { rootRef: RefObject<HTMLDivElement | 
     setDur(0);
   }, [src]);
 
-  const togglePlay = () => {
-    const v = videoRef.current;
-    if (!v) return;
-    if (v.paused) void v.play();
-    else v.pause();
-  };
+  // Register this video's controls so the scene (spacebar) and SelectionBar
+  // (reference) can reach it; unregister when it's no longer the live player.
+  useEffect(() => {
+    if (show && sel) {
+      useVideoPlaybackStore.getState().register(sel, togglePlay);
+      const id = sel;
+      return () => useVideoPlaybackStore.getState().unregister(id);
+    }
+  }, [show, sel, togglePlay]);
 
-  const stepFrame = (dir: 1 | -1) => {
+  const seekToClientX = (clientX: number) => {
     const v = videoRef.current;
-    if (!v) return;
-    v.pause();
-    const next = Math.max(0, Math.min(v.duration || dur, v.currentTime + dir / fps));
-    v.currentTime = next;
-  };
-
-  const onScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = videoRef.current;
-    if (!v) return;
-    const time = Number(e.target.value);
-    // fastSeek where available keeps dragging smooth; assignment is the precise
-    // fallback (and what fires on release).
-    if (typeof v.fastSeek === "function") v.fastSeek(time);
-    else v.currentTime = time;
+    const el = scrubRef.current;
+    if (!v || !el || !dur) return;
+    const rect = el.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const time = ratio * dur;
+    // Precise assignment (not fastSeek) so WKWebView actually renders the frame
+    // under the cursor — the live preview the user expects while dragging.
+    v.currentTime = time;
     setCur(time);
+    useVideoPlaybackStore.getState().setTime(time, true);
+  };
+
+  const onScrubDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    videoRef.current?.pause();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    seekToClientX(e.clientX);
+  };
+
+  const onScrubMove = (e: React.PointerEvent) => {
+    if (e.buttons === 0) return; // only while dragging
+    seekToClientX(e.clientX);
   };
 
   const toggleMute = () => {
@@ -117,6 +141,8 @@ export function VideoOverlay({ rootRef }: { rootRef: RefObject<HTMLDivElement | 
     return `${m}:${ss.toString().padStart(2, "0")}`;
   };
 
+  const progress = dur > 0 ? Math.max(0, Math.min(1, cur / dur)) * 100 : 0;
+
   return (
     <div ref={rootRef} className="cm-vidip" style={{ display: "none" }}>
       {show && src && (
@@ -134,31 +160,39 @@ export function VideoOverlay({ rootRef }: { rootRef: RefObject<HTMLDivElement | 
               muted={muted}
               playsInline
               preload="metadata"
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
-              onLoadedMetadata={(e) => setDur(e.currentTarget.duration)}
+              onPlay={() => {
+                setPlaying(true);
+                useVideoPlaybackStore.getState().setPlaying(true);
+              }}
+              onPause={() => {
+                setPlaying(false);
+                useVideoPlaybackStore.getState().setPlaying(false);
+              }}
+              onTimeUpdate={(e) => {
+                const time = e.currentTarget.currentTime;
+                setCur(time);
+                useVideoPlaybackStore.getState().setTime(time);
+              }}
+              onLoadedMetadata={(e) => {
+                const d = e.currentTarget.duration;
+                setDur(d);
+                useVideoPlaybackStore.getState().setDuration(d);
+              }}
             />
           </div>
           <div className="cm-vidip__bar" onPointerDown={(e) => e.stopPropagation()}>
             <button className="cm-vidip__btn" title={playing ? t("vid.pause") : t("vid.play")} onClick={togglePlay}>
               {playing ? <Pause size={15} /> : <Play size={15} />}
             </button>
-            <button className="cm-vidip__btn" title={t("vid.prevFrame")} onClick={() => stepFrame(-1)}>
-              <ChevronLeft size={15} />
-            </button>
-            <button className="cm-vidip__btn" title={t("vid.nextFrame")} onClick={() => stepFrame(1)}>
-              <ChevronRight size={15} />
-            </button>
-            <input
+            <div
+              ref={scrubRef}
               className="cm-vidip__scrub"
-              type="range"
-              min={0}
-              max={dur || 0}
-              step={0.01}
-              value={cur}
-              onChange={onScrub}
-            />
+              onPointerDown={onScrubDown}
+              onPointerMove={onScrubMove}
+            >
+              <div className="cm-vidip__scrub-fill" style={{ width: `${progress}%` }} />
+              <div className="cm-vidip__scrub-knob" style={{ left: `${progress}%` }} />
+            </div>
             <span className="cm-vidip__time">
               {fmt(cur)} / {fmt(dur)}
             </span>

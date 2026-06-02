@@ -2261,6 +2261,15 @@ async fn handle_notification(inner: &Arc<CodexSessionInner>, method: &str, param
                 tracing::warn!(module = "codex", status = %status, error = ?error, "turn did not complete");
             }
             clear_active_turn(inner);
+            // Pick up media the agent produced via bash/ffmpeg (no structured
+            // imageGeneration signal) before clearing per-turn state — needs
+            // `current_sources` for right-of-source placement, and must run
+            // before `flush_turn_timeline` so the cards land in this turn's
+            // persisted timeline (PRD §17/F1). Only on a clean finish: a failed /
+            // aborted turn may have left a partial/garbage file we shouldn't place.
+            if status == "completed" {
+                ingest_turn_outputs(inner).await;
+            }
             // Clear per-turn state so a stray late item can't leak / mis-place
             // against stale sources (review #3, #6).
             clear_stream_state(inner);
@@ -2536,6 +2545,98 @@ fn start_generation(inner: &Arc<CodexSessionInner>, item_id: &str) {
         w: rect.2,
         h: rect.3,
     });
+}
+
+/// PRD §17/F1: after a turn ends, surface any new media file the agent produced
+/// outside the first-party `imageGeneration` tool (bash/ffmpeg output emits no
+/// structured signal). Diffs the Board folder against tracked asset paths; each
+/// genuinely-new file is minted, placed right-of-source with lineage, and
+/// emitted as `ImageGenerated` — exactly like a generated image, so it lands on
+/// the canvas AND gets a chat card. Content-id dedup keeps a no-op re-encode (or
+/// an output already minted mid-turn via `imageGeneration`) from doubling.
+async fn ingest_turn_outputs(inner: &Arc<CodexSessionInner>) {
+    let Some(entry) = inner.registry.get(&inner.board_id) else {
+        return;
+    };
+    let (known_paths, mut assets_snapshot) = {
+        let doc = entry.doc.lock();
+        let paths: Vec<String> = doc.assets.iter().map(|a| a.path.clone()).collect();
+        (paths, doc.assets.clone())
+    };
+    let new_files: Vec<String> = assets::scan_images(&inner.folder)
+        .into_iter()
+        .filter(|f| !known_paths.iter().any(|p| p == f))
+        .collect();
+    if new_files.is_empty() {
+        return;
+    }
+
+    // Mint OUTSIDE the doc lock (ffprobe + poster extraction for videos is heavy).
+    let mut minted = Vec::new();
+    for name in &new_files {
+        match assets::mint_asset(&inner.folder, name, crate::model::Origin::Generated) {
+            Ok(a) => {
+                if assets_snapshot.iter().any(|x| x.id == a.id) {
+                    continue; // byte-identical to something already tracked
+                }
+                assets_snapshot.push(a.clone());
+                minted.push(a);
+            }
+            Err(e) => tracing::warn!(module = "codex", "turn ingest mint {name} failed: {e}"),
+        }
+    }
+    if minted.is_empty() {
+        return;
+    }
+
+    let sources = inner.current_sources.lock().clone();
+    let save_guard = entry.save.lock();
+    let (placed, doc_clone) = {
+        let mut doc = entry.doc.lock();
+        // Right-of-source like a generated image; lineage via parent_id. No
+        // source selected → flow below existing content (derived_anchor).
+        let source_pair = sources.first().and_then(|sid| {
+            let p = doc.placements.iter().find(|p| &p.id == sid)?.clone();
+            let a = doc.assets.iter().find(|a| a.id == p.asset_id)?.clone();
+            Some((p, a))
+        });
+        let mut out = Vec::new();
+        for asset in minted {
+            let out_index = inner.output_index.fetch_add(1, Ordering::SeqCst) as i64;
+            let placement = board::make_derived_placement(
+                &asset,
+                source_pair.as_ref().map(|(p, a)| (p, a)),
+                out_index,
+                &doc,
+            );
+            if !doc.assets.iter().any(|a| a.id == asset.id) {
+                doc.assets.push(asset.clone());
+            }
+            doc.placements.push(placement.clone());
+            out.push((asset, placement));
+        }
+        (out, doc.clone())
+    };
+    if let Err(e) = storage::save_board_doc(&inner.folder, &doc_clone) {
+        tracing::warn!(module = "codex", "save board after turn ingest failed: {e}");
+    }
+    drop(save_guard);
+
+    for (asset, placement) in placed {
+        // Mirror the "done" image block shape so the persisted timeline matches.
+        inner.turn_blocks.lock().push(json!({
+            "type": "image",
+            "placementId": placement.id,
+            "caption": Value::Null,
+            "status": "done",
+        }));
+        inner.emit(UnifiedEvent::ImageGenerated {
+            asset,
+            placement,
+            caption: None,
+            placeholder_id: None,
+        });
+    }
 }
 
 async fn on_image_generation(inner: &Arc<CodexSessionInner>, item: &Value) {

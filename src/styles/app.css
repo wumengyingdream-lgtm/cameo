@@ -1424,6 +1424,17 @@ body.cm-chat-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Timestamp badge on a video frame-reference pill (PRD §17/F6). */
+.cm-pill__ts {
+  flex: none;
+  margin-left: 1px;
+  padding: 0 5px;
+  border-radius: var(--cm-radius-pill);
+  background: rgba(255, 255, 255, 0.24);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
 /* Inline variant — pills rendered INSIDE a red user-message bubble. The
    default red-bg/white-text pill would vanish against the bubble; flip to
    light bg + accent-color text for contrast. Same image circle + label,
@@ -3849,9 +3860,9 @@ body.cm-chat-resizing {
   gap: 4px;
   padding: 5px 8px;
   background: var(--cm-surface);
-  border: 1px solid var(--cm-border);
+  border: 1px solid var(--cm-line);
   border-radius: var(--cm-radius-md);
-  box-shadow: var(--cm-shadow-lg);
+  box-shadow: var(--cm-shadow-3);
   pointer-events: auto;
   white-space: nowrap;
 }
@@ -3864,26 +3875,59 @@ body.cm-chat-resizing {
   border: none;
   border-radius: var(--cm-radius-sm);
   background: transparent;
-  color: var(--cm-ink);
+  color: var(--cm-fg);
   cursor: pointer;
 }
 .cm-vidip__btn:hover {
-  background: var(--cm-accent-soft);
+  background: var(--cm-accent-bg);
 }
 .cm-vidip__btn--accent {
   color: var(--cm-accent);
 }
+/* Drag scrubber (PRD §17/F4): a wide hit area so it's easy to grab; the inner
+   track is thin. Dragging seeks live (frame preview) and stays put on release. */
 .cm-vidip__scrub {
+  position: relative;
   width: 150px;
-  accent-color: var(--cm-accent);
+  height: 18px;
+  display: flex;
+  align-items: center;
   cursor: pointer;
+  touch-action: none;
+}
+.cm-vidip__scrub::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--cm-line);
+}
+.cm-vidip__scrub-fill {
+  position: absolute;
+  left: 0;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--cm-accent);
+  pointer-events: none;
+}
+.cm-vidip__scrub-knob {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--cm-accent);
+  box-shadow: var(--cm-shadow-1);
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 .cm-vidip__time {
   min-width: 76px;
   text-align: center;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  color: var(--cm-ink-muted);
+  color: var(--cm-muted);
 }
 
 /* ffmpeg install error line — red accent doubles as the error color in the

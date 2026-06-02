@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useBoardStore } from "../store/board";
+import { useClipboardStore, CAMEO_CLIP_MARKER } from "../store/clipboard";
 
 interface FileImportOptions {
   onDrop?: (paths: string[], position?: { x: number; y: number }) => void;
@@ -43,18 +44,38 @@ export function useFileImport(options: FileImportOptions = {}) {
     };
   }, []);
 
-  // Clipboard paste of an image.
+  // Clipboard paste onto the canvas. Two sources, in priority order:
+  //  1. The in-app canvas clipboard (Cmd+C of placements) — multi-select,
+  //     cross-board, and videos. Re-imports every copied item by source path.
+  //  2. OS clipboard image/video bytes — a single picture/clip pasted from
+  //     another app, imported as one new placement.
+  // Pastes targeting an editable (the chat composer / inputs) are left alone —
+  // the composer has its own paste handler that turns content into a reference.
   useEffect(() => {
     const onPaste = async (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+      // In-app canvas clipboard wins only while it's still the most recent copy
+      // — i.e. the OS clipboard still carries our marker. Otherwise something was
+      // copied elsewhere afterwards, so fall through to the OS clipboard bytes.
+      const marker = e.clipboardData?.getData("text/plain");
+      if (useClipboardStore.getState().items.length > 0 && marker === CAMEO_CLIP_MARKER) {
+        e.preventDefault();
+        void useBoardStore.getState().pasteClipboard();
+        return;
+      }
       const items = e.clipboardData?.items;
       if (!items) return;
       for (const it of items) {
-        if (it.type.startsWith("image/")) {
+        if (it.type.startsWith("image/") || it.type.startsWith("video/")) {
           const file = it.getAsFile();
           if (!file) continue;
           const buf = new Uint8Array(await file.arrayBuffer());
           const ext = it.type.split("/")[1] || "png";
           void useBoardStore.getState().importBytes(buf, ext, "image");
+          break;
         }
       }
     };

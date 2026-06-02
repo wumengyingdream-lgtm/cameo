@@ -226,7 +226,9 @@ pub fn import_bytes(
     if let Some(a) = existing.iter().find(|a| a.id == id) {
         return Ok(a.clone());
     }
-    let ext = if is_image_ext(ext) { ext } else { "png" };
+    // Keep a known image/video extension (clipboard paste can carry a video);
+    // anything else falls back to png so a bogus ext can't poison the filename.
+    let ext = if is_media_ext(ext) { ext } else { "png" };
     let rel = timestamped_name(folder, stem, ext);
     std::fs::write(folder.join(&rel), bytes)
         .with_context(|| format!("write {}", folder.join(&rel).display()))?;

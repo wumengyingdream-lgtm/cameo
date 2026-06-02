@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { ipc } from "../lib/ipc";
 import { track } from "../services/cloud/telemetry";
+import { useClipboardStore } from "./clipboard";
 import { useHistoryStore } from "./history";
 import { useUiStore } from "./ui";
 import { useToastStore } from "./toast";
@@ -55,6 +56,9 @@ interface BoardState {
   importFilesAt: (paths: string[], center: { x: number; y: number }) => Promise<Placement[]>;
   importBytes: (bytes: Uint8Array, ext: string, stem: string) => Promise<Placement[]>;
   importBytesAt: (bytes: Uint8Array, ext: string, stem: string, center: { x: number; y: number }) => Promise<Placement[]>;
+  /** Paste the in-app canvas clipboard into this board (cross-board + multi +
+   *  video). Re-imports each item by source path; selects the new placements. */
+  pasteClipboard: () => Promise<Placement[]>;
   /** Merge an already-completed Rust import (assets + placements) into local
    *  state, pushing the standard import-undo step. Used by side paths that
    *  invoked their own dedicated Rust importer (e.g. `import_chat_image_to_canvas`)
@@ -284,6 +288,26 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       pushImportUndo(boardId, result.placements, set);
     }
     maybeInstallFfmpegFor(result.assets);
+  },
+
+  pasteClipboard: async () => {
+    const { boardId } = get();
+    const { sourceBoardId, items } = useClipboardStore.getState();
+    if (!boardId || items.length === 0) return [];
+    try {
+      const result = await ipc.pasteIntoBoard(boardId, sourceBoardId, items);
+      set((s) => mergeImport(s, result));
+      pushImportUndo(boardId, result.placements, set);
+      maybeInstallFfmpegFor(result.assets);
+      if (result.placements.length) {
+        set({ selection: new Set(result.placements.map((p) => p.id)) });
+        void track("image_imported", { source: "paste", count: result.placements.length });
+      }
+      return result.placements;
+    } catch (e) {
+      set({ error: String(e) });
+      return [];
+    }
   },
 
   commitMoves: async (updates) => {

@@ -1,12 +1,21 @@
 import { useState, type RefObject } from "react";
-import { Eraser, Sparkles, Crop, MoreHorizontal, Copy, FolderOpen, Download, Trash2 } from "lucide-react";
+import { Eraser, Sparkles, Crop, MoreHorizontal, Copy, FolderOpen, Download, Trash2, AtSign } from "lucide-react";
 import { useBoardStore } from "../store/board";
 import { useChatStore } from "../store/chat";
 import { useUiStore } from "../store/ui";
+import { useComposerStore } from "../store/composer";
+import { useVideoPlaybackStore } from "../store/videoPlayback";
 import { ipc } from "../lib/ipc";
 import { isVideoAsset } from "../lib/media";
 import { PRESET_REMOVE_BG, PRESET_UPSCALE, runImagePreset, exportImage } from "../lib/imageActions";
 import { useT } from "../i18n/locale";
+
+/** "M:SS" for a video position in seconds (the frame-reference pill badge). */
+function fmtClock(s: number): string {
+  const m = Math.floor(s / 60);
+  const ss = Math.floor(s % 60);
+  return `${m}:${ss.toString().padStart(2, "0")}`;
+}
 
 /** Per-image action bar — floats just above the selected image's title (the
  *  scene positions `rootRef` every frame so it follows drag/pan/zoom). Shown
@@ -36,10 +45,40 @@ export function SelectionBar({ rootRef }: { rootRef: RefObject<HTMLDivElement | 
     runImagePreset(boardId, first, prompt);
   };
 
+  /** "Reference" the selected video into the composer (PRD §17/F6): the whole
+   *  file at its start, or — if the user has scrubbed to a frame — that exact
+   *  frame (still + timestamp). Falls back to a whole-file reference if frame
+   *  extraction fails (ffmpeg unavailable). */
+  const referenceVideo = async () => {
+    if (!boardId || !first) return;
+    const pb = useVideoPlaybackStore.getState();
+    const atScrubbedFrame = pb.placementId === first && pb.scrubbed && pb.currentTime > 0.05;
+    if (atScrubbedFrame) {
+      try {
+        const path = await ipc.referenceVideoFrame(boardId, first, pb.currentTime);
+        useComposerStore.getState().injectPill(first, {
+          atMs: Math.round(pb.currentTime * 1000),
+          path,
+          label: fmtClock(pb.currentTime),
+        });
+        return;
+      } catch {
+        // ffmpeg missing / extraction failed → whole-file reference instead.
+      }
+    }
+    useComposerStore.getState().injectPill(first);
+  };
+
   return (
     <div className="cm-selbar" ref={rootRef} style={{ display: "none" }}>
       {first && boardId && (
         <>
+          {isVideo && (
+            <button className="cm-selbar__btn" title={t("video.referenceTitle")} onClick={() => void referenceVideo()}>
+              <AtSign size={14} />
+              {t("video.reference")}
+            </button>
+          )}
           {!isVideo && (
             <>
               <button className="cm-selbar__btn" disabled={!ready} title={t("img.removeBgTitle")} onClick={() => runPreset(PRESET_REMOVE_BG)}>

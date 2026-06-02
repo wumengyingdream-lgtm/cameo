@@ -34,6 +34,9 @@ export interface SceneCallbacks {
   onSelectionChange?: (ids: string[]) => void;
   /** Space held/released for transient pan → reflect the Hand tool in the UI. */
   onSpacePanChange?: (active: boolean) => void;
+  /** Spacebar pressed: a selected video claims it for play/pause. Returns true
+   *  when handled (a video is focused) so the scene skips its transient pan. */
+  onSpacebar?: () => boolean;
   /** Native right-click on the canvas → show a custom context menu. */
   onContextMenu?: (t: CanvasContextTarget) => void;
   onCommitMoves?: (updates: PlacementUpdate[]) => void;
@@ -1625,6 +1628,9 @@ export class CanvasScene {
     if (this.cropActive) return;
     if (document.querySelector(".cm-ctx, .cm-modal-backdrop, .cm-gallery-backdrop, .cm-gdetail-backdrop, .cm-compare")) return;
     e.preventDefault();
+    if (e.repeat) return; // auto-repeat: no re-toggle, no pan-restart
+    // A focused video claims space for play/pause (before transient pan).
+    if (this.cb.onSpacebar?.()) return;
     if (!this.spacePan) {
       this.spacePan = true;
       this.cb.onSpacePanChange?.(true);

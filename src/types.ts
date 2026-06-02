@@ -105,6 +105,18 @@ export interface ImportResult {
   placements: Placement[];
 }
 
+/** One placement carried in the in-app canvas clipboard (mirrors Rust
+ *  `PasteItem`). `assetPath` is relative to the source board's folder; the
+ *  transform is the source placement's, preserved across paste. */
+export interface ClipItem {
+  assetPath: string;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  crop?: Rect;
+}
+
 export interface PlacementUpdate {
   id: string;
   x: number;
