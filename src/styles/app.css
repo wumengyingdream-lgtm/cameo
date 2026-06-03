@@ -2915,6 +2915,13 @@ body.cm-chat-resizing {
   gap: 8px;
   margin-top: 16px;
 }
+/* Both actions share the primary CTA's size so the row isn't lopsided — the
+   secondary (更新记录) would otherwise keep the smaller base .cm-btn padding/font.
+   Scoped to this row so primary/secondary pairs elsewhere are untouched. */
+.cm-set-update .cm-btn {
+  padding: 9px 16px;
+  font-size: 13px;
+}
 /* Inline download progress — occupies the same slot as the check button. */
 .cm-progress {
   display: flex;
