@@ -57,11 +57,14 @@ export function useFileImport(options: FileImportOptions = {}) {
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
         return;
       }
-      // In-app canvas clipboard wins only while it's still the most recent copy
-      // — i.e. the OS clipboard still carries our marker. Otherwise something was
-      // copied elsewhere afterwards, so fall through to the OS clipboard bytes.
-      const marker = e.clipboardData?.getData("text/plain");
-      if (useClipboardStore.getState().items.length > 0 && marker === CAMEO_CLIP_MARKER) {
+      // In-app canvas clipboard wins when it's still the most recent copy — the
+      // OS clipboard carries our marker (trim: some managers strip whitespace).
+      // If the marker couldn't be written at all (`marked` false), trust the
+      // in-app store as a fallback rather than silently dropping the copy.
+      // Otherwise something was copied elsewhere after us → fall through to bytes.
+      const clip = useClipboardStore.getState();
+      const markerMatch = e.clipboardData?.getData("text/plain")?.trim() === CAMEO_CLIP_MARKER;
+      if (clip.items.length > 0 && (markerMatch || !clip.marked)) {
         e.preventDefault();
         void useBoardStore.getState().pasteClipboard();
         return;

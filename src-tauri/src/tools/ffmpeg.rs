@@ -366,7 +366,9 @@ pub fn extract_frame_at(video: &Path, out: &Path, at_seconds: f64) -> bool {
         None => return false,
     };
     // Keep a `.png` extension so ffmpeg infers the PNG muxer (see extract_poster).
-    let tmp = dir.join(format!(".frameref-tmp-{}.png", nanoid::nanoid!(8)));
+    // Prefix `.overlay-` so a crash between write and rename leaves an orphan the
+    // board-open `sweep_overlays` reclaims (it only matches `.overlay-*.png`).
+    let tmp = dir.join(format!(".overlay-frameref-tmp-{}.png", nanoid::nanoid!(8)));
     let ss = format!("{:.3}", at_seconds.max(0.0));
     let mut cmd = Command::new(&tools.ffmpeg);
     cmd.args(["-y", "-loglevel", "error", "-ss"])

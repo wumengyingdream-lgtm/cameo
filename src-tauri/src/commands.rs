@@ -309,7 +309,17 @@ pub fn paste_into_board(
     let mut known_assets = entry.doc.lock().assets.clone();
     let mut staged: Vec<(Asset, usize)> = Vec::new();
     for (i, item) in items.iter().enumerate() {
-        let src = source_folder.join(&item.asset_path);
+        // `asset_path` is webview-supplied; confine it to the source folder (no
+        // absolute paths, no `..` escape) before reading — same guard the asset
+        // helpers use. A crafted payload otherwise reads arbitrary files.
+        let rel = match board_safe_rel_path(&item.asset_path) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(module = "commands", "paste {} rejected: {e}", item.asset_path);
+                continue;
+            }
+        };
+        let src = source_folder.join(&rel);
         match assets::import_external(&entry.folder, &src, &known_assets) {
             Ok(asset) => {
                 if !known_assets.iter().any(|a| a.id == asset.id) {

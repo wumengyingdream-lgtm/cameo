@@ -2603,6 +2603,10 @@ async fn ingest_turn_outputs(inner: &Arc<CodexSessionInner>) {
             let a = doc.assets.iter().find(|a| a.id == p.asset_id)?.clone();
             Some((p, a))
         });
+        // Compute every anchor against the SAME doc state, THEN push as a batch.
+        // Mutating `doc` mid-loop would advance `next_batch_top` (the no-source
+        // anchor) on top of `out_index`, double-counting the vertical offset and
+        // leaving ever-widening gaps between multiple outputs of one turn.
         let mut out = Vec::new();
         for asset in minted {
             let out_index = inner.output_index.fetch_add(1, Ordering::SeqCst) as i64;
@@ -2612,11 +2616,13 @@ async fn ingest_turn_outputs(inner: &Arc<CodexSessionInner>) {
                 out_index,
                 &doc,
             );
+            out.push((asset, placement));
+        }
+        for (asset, placement) in &out {
             if !doc.assets.iter().any(|a| a.id == asset.id) {
                 doc.assets.push(asset.clone());
             }
             doc.placements.push(placement.clone());
-            out.push((asset, placement));
         }
         (out, doc.clone())
     };

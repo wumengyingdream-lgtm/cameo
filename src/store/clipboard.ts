@@ -8,8 +8,11 @@ import type { ClipItem } from "../types";
  * since been copied (an image from another app, a file from Finder), the marker
  * is gone and we fall back to the OS clipboard. This keeps a stale in-app
  * clipboard from permanently shadowing external copies without eagerly clearing.
+ *
+ * No surrounding whitespace (some clipboard managers trim it) — paste compares
+ * with `.trim()` for the same reason.
  */
-export const CAMEO_CLIP_MARKER = " cameo-canvas-clipboard ";
+export const CAMEO_CLIP_MARKER = "cameo-canvas-clipboard";
 
 /**
  * In-app canvas clipboard for copy/paste of placements, including ACROSS boards
@@ -23,13 +26,21 @@ export const CAMEO_CLIP_MARKER = " cameo-canvas-clipboard ";
 interface ClipboardState {
   sourceBoardId: string | null;
   items: ClipItem[];
+  /** Whether the OS-clipboard freshness marker was successfully written for the
+   *  current copy. When false (writeText unavailable/denied), paste can't trust
+   *  the marker, so it falls back to the in-app store rather than silently
+   *  dropping a multi-select / video copy. */
+  marked: boolean;
   set: (sourceBoardId: string, items: ClipItem[]) => void;
+  setMarked: (marked: boolean) => void;
   clear: () => void;
 }
 
 export const useClipboardStore = create<ClipboardState>((set) => ({
   sourceBoardId: null,
   items: [],
-  set: (sourceBoardId, items) => set({ sourceBoardId, items }),
-  clear: () => set({ sourceBoardId: null, items: [] }),
+  marked: false,
+  set: (sourceBoardId, items) => set({ sourceBoardId, items, marked: false }),
+  setMarked: (marked) => set({ marked }),
+  clear: () => set({ sourceBoardId: null, items: [], marked: false }),
 }));

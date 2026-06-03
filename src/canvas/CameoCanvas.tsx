@@ -244,9 +244,14 @@ export function CameoCanvas() {
         if (items.length) {
           useClipboardStore.getState().set(b.boardId, items);
           // Stamp the OS clipboard so paste can tell this in-app copy is the most
-          // recent one (vs. an image copied elsewhere afterwards). External image
-          // interop lives on the explicit "Copy image" action in SelectionBar.
-          void navigator.clipboard.writeText(CAMEO_CLIP_MARKER).catch(() => {});
+          // recent one (vs. an image copied elsewhere afterwards). Track success:
+          // if writeText is unavailable/denied, paste falls back to the in-app
+          // store instead of silently dropping the copy. External image interop
+          // lives on the explicit "Copy image" action in SelectionBar.
+          navigator.clipboard
+            .writeText(CAMEO_CLIP_MARKER)
+            .then(() => useClipboardStore.getState().setMarked(true))
+            .catch(() => useClipboardStore.getState().setMarked(false));
         }
         return;
       }
