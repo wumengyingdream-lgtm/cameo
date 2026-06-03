@@ -1259,6 +1259,48 @@ body.cm-chat-resizing {
   width: 120px;
   height: 80px;
 }
+/* Inline chat video: width-constrained like an image thumbnail, first-frame
+   still + play badge until clicked (then native controls). */
+.cm-chatvid-wrap {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 4px 0;
+}
+.cm-chatvid-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 260px;
+  border-radius: var(--cm-radius-md);
+  overflow: hidden;
+  border: 1px solid var(--cm-line);
+  background: var(--cm-gray-100);
+  line-height: 0;
+  cursor: pointer;
+}
+.cm-chatvid {
+  display: block;
+  max-width: 100%;
+  max-height: 340px;
+  object-fit: contain;
+}
+.cm-chatvid-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: background 0.12s ease;
+}
+.cm-chatvid-frame:hover .cm-chatvid-play {
+  background: rgba(0, 0, 0, 0.66);
+}
 /* Context menu variant for chat images — reuse base .cm-ctx style. */
 .cm-ctx--chatimg {
   min-width: 168px;
