@@ -2958,6 +2958,79 @@ body.cm-chat-resizing {
   color: var(--cm-fg-secondary);
   white-space: nowrap;
 }
+
+/* About footer — community QR + developer/contact. Unlike the editorial rows
+   above (title left / control right), these center or grid their content. */
+.cm-about-qr {
+  text-align: center;
+}
+.cm-about-qr__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--cm-fg);
+}
+.cm-about-qr__desc {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--cm-muted);
+}
+.cm-about-qr__img {
+  display: block;
+  width: 168px;
+  height: 168px;
+  margin: 16px auto 0;
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  background: var(--cm-surface);
+}
+/* Developer / contact: two-column meta grid + centered copyright. */
+.cm-about-meta__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px 20px;
+}
+.cm-about-meta__cell {
+  min-width: 0;
+}
+.cm-about-meta__label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--cm-muted);
+}
+.cm-about-meta__value {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--cm-fg);
+}
+/* Link rendered as a button (opener plugin), reset to inline text. */
+.cm-about-meta__link {
+  display: inline-block;
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--cm-accent-text);
+  text-align: left;
+  word-break: break-all;
+  cursor: pointer;
+}
+.cm-about-meta__link:hover {
+  text-decoration: underline;
+}
+.cm-about-meta__copyright {
+  margin: 20px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--cm-muted);
+}
 /* Inline connectivity line inside the proxy block — icon + colored text, no
    filled chip (the surrounding gray block already groups it). */
 .cm-set-probe {

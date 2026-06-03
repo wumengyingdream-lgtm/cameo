@@ -231,6 +231,14 @@ export const en = {
   "settings.about": "About",
   "settings.aboutDesc": "Check for and install the latest version, or view the full changelog.",
   "settings.version": "Version",
+  // About footer — community QR + developer/contact links
+  "settings.community": "Join the Community",
+  "settings.communityDesc": "Scan to join our WeChat group and swap tips with other Cameo users.",
+  "settings.communityQrAlt": "WeChat group QR code",
+  "settings.metaDeveloper": "Developer",
+  "settings.metaWebsite": "Website",
+  "settings.metaContact": "Contact",
+  "settings.metaGithub": "GitHub",
 
   // Gallery — prompt inspiration overlay
   "gallery.button": "Gallery",
@@ -487,6 +495,13 @@ export const zh: Record<MsgKey, string> = {
   "settings.about": "关于",
   "settings.aboutDesc": "检查并安装最新版本，或查看完整更新记录。",
   "settings.version": "版本",
+  "settings.community": "加入用户交流群",
+  "settings.communityDesc": "扫码加入，与其他用户交流使用心得",
+  "settings.communityQrAlt": "用户交流群二维码",
+  "settings.metaDeveloper": "开发者",
+  "settings.metaWebsite": "官网",
+  "settings.metaContact": "联系方式",
+  "settings.metaGithub": "GitHub",
 
   "gallery.button": "Gallery",
   "gallery.title": "Prompt 灵感库",
