@@ -33,6 +33,7 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(8);
 /// network-mounted path can never block import / backfill / open_board forever.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const MANIFEST_URL: &str = "https://r.cameo.ink/tools/ffmpeg/manifest.json";
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// One install runs at a time (the UI button + an auto-trigger could both fire).
 static INSTALLING: AtomicBool = AtomicBool::new(false);
@@ -447,6 +448,10 @@ async fn download_verified(
 
     let mut resp = crate::net::client()
         .get(url)
+        // The shared product client has a short timeout for JSON/API calls.
+        // Windows ffmpeg builds are ~220 MB each, so the managed tool download
+        // needs its own end-to-end budget while still using the proxied client.
+        .timeout(DOWNLOAD_TIMEOUT)
         .send()
         .await
         .map_err(|e| format!("{name}: download failed: {e}"))?;
@@ -613,6 +618,7 @@ pub async fn install(app: AppHandle) -> Result<(), String> {
             let _ = app.emit("ffmpeg:done", ());
         }
         Err(e) => {
+            tracing::warn!(module = "tools", "ffmpeg install failed: {e}");
             let _ = app.emit("ffmpeg:failed", e.clone());
         }
     }
