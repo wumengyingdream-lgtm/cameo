@@ -87,6 +87,11 @@ interface Node {
   /** Number badges + note text for each mark. */
   noteLayer: Container;
   content: Sprite | null;
+  /** Play-circle overlay for VIDEO placements (null for images) — the only
+   *  thing distinguishing a video tile from an image tile at rest. Hidden while
+   *  the placement is the sole selection (the live VideoOverlay player owns the
+   *  surface then). Rebuilt with the node on a poster backfill. */
+  videoBadge: Graphics | null;
   assetId: string;
   /** The still source this node's texture was loaded from (image path, or a
    *  video's poster path). When it changes for the SAME assetId — e.g. a video
@@ -904,6 +909,18 @@ export class CanvasScene {
     const noteLayer = new Container();
     container.addChild(noteLayer);
 
+    // Video tiles get a centered play-circle so they read as video — without it
+    // a poster still is indistinguishable from an image. Drawn above the content
+    // (added later at index 1) but below the outline, and purely decorative so it
+    // never steals the container's hit target.
+    let videoBadge: Graphics | null = null;
+    if (isVideoAsset(asset)) {
+      videoBadge = new Graphics();
+      videoBadge.eventMode = "none";
+      this.drawVideoBadge(videoBadge, w, h);
+      container.addChild(videoBadge);
+    }
+
     const outline = new Graphics();
     container.addChild(outline);
 
@@ -914,6 +931,7 @@ export class CanvasScene {
       anno,
       noteLayer,
       content: null,
+      videoBadge,
       assetId: p.assetId,
       stillKey: stillKeyOf(asset),
       w,
@@ -947,6 +965,9 @@ export class CanvasScene {
           // Correct dims to the true texture size.
           node.w = tex.width;
           node.h = tex.height;
+          // Re-scale the video badge to the real poster size (placeholder dims
+          // were nominal until now).
+          if (node.videoBadge) this.drawVideoBadge(node.videoBadge, node.w, node.h);
           this.redrawNodeOutline(p.id);
           this.drawAnnotation(p.id, node, this.annotations.get(p.id) ?? []);
         })
@@ -962,6 +983,21 @@ export class CanvasScene {
     node.container.destroy({ children: true });
   }
 
+  /** Draw a centered, semi-transparent play-circle into `g` (world space, sized
+   *  off the placement). The video tile's at-rest "this is a video" marker. */
+  private drawVideoBadge(g: Graphics, w: number, h: number): void {
+    g.clear();
+    // Proportional to the tile (scales with the poster like its content), with a
+    // floor so thumbnails on small videos stay legible.
+    const r = Math.max(18, Math.min(w, h) * 0.1);
+    g.circle(0, 0, r)
+      .fill({ color: 0x000000, alpha: 0.42 })
+      .stroke({ width: Math.max(2, r * 0.07), color: HALO, alpha: 0.9 });
+    // Right-pointing play triangle, nudged right for optical centering.
+    const t = r * 0.46;
+    g.poly([-t * 0.72, -t, -t * 0.72, t, t * 0.92, 0]).fill({ color: HALO, alpha: 0.95 });
+  }
+
   private setHoveredNode(id: string | null): void {
     if (this.hoveredId === id) return;
     const prev = this.hoveredId;
@@ -974,6 +1010,12 @@ export class CanvasScene {
     const node = this.nodes.get(id);
     if (!node) return;
     this.drawOutline(node, !this.cropActive && this.selected.has(id), this.hoveredId === id);
+    // The play badge yields to the live VideoOverlay player, which renders only
+    // for a SOLE video selection — so hide the badge exactly then. Multi-select
+    // (no live player) keeps it, so every video stays recognizable.
+    if (node.videoBadge) {
+      node.videoBadge.visible = !(this.selected.size === 1 && this.selected.has(id));
+    }
   }
 
   private applyTransform(node: Node, p: Placement): void {

@@ -125,8 +125,10 @@ pub fn mint_asset(folder: &Path, rel_path: &str, origin: Origin) -> Result<Asset
 /// Extract (or reuse) the first-frame poster for a video into the Board sidecar
 /// (`.cameo/posters/<hash>.jpg`). Returns the board-relative path, or `None`
 /// when ffmpeg is unavailable / extraction failed. Content-addressed by the
-/// video's hash so re-minting identical bytes reuses one poster.
-fn extract_video_poster(folder: &Path, video_abs: &Path, id: &str) -> Option<String> {
+/// video's hash so re-minting identical bytes reuses one poster. Shared with the
+/// chat resolver (`resolve_chat_image`) so a chat-inlined video shows the SAME
+/// first-frame still the canvas renders, from one extraction.
+pub(crate) fn extract_video_poster(folder: &Path, video_abs: &Path, id: &str) -> Option<String> {
     let rel = format!(".cameo/posters/{id}.jpg");
     let out = folder.join(&rel);
     if out.is_file() {

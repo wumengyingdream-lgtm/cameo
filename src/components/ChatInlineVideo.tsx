@@ -15,16 +15,22 @@ import { useT } from "../i18n/locale";
  * load through the Cameo image protocol (which serves Range requests, so the
  * player can seek); out-of-workspace videos show a chip (no protocol reach).
  * Right-click bridges the artifact back into the canvas/reference loop.
+ *
+ * The first-frame still comes from the `poster` attribute (the same
+ * content-addressed JPEG the canvas renders, resolved by the backend), NOT from
+ * `preload="metadata"` — a bare `<video>` paints blank until played in
+ * WKWebView, so the poster is what makes the still appear.
  */
 export function ChatInlineVideo({ res, basename }: { res: ChatImageResolution; basename: string }) {
   const t = useT();
   const boardId = useBoardStore((s) => s.boardId);
   const placements = useBoardStore((s) => s.placements);
+  const assets = useBoardStore((s) => s.assets);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [addedPlacementId, setAddedPlacementId] = useState<string | null>(null);
-  // Click-to-play: until the user starts it, the element is a poster still
-  // (preload=metadata renders the first frame) with a play badge and no chrome.
+  // Click-to-play: until the user starts it, the element shows its first-frame
+  // poster (see `poster` below) with a play badge and no chrome.
   const [started, setStarted] = useState(false);
 
   const onContext = (e: React.MouseEvent) => {
@@ -40,11 +46,20 @@ export function ChatInlineVideo({ res, basename }: { res: ChatImageResolution; b
 
   const existingPlacementId = addedPlacementId ?? res.existingPlacementId ?? null;
   const existingPlacement = existingPlacementId ? placements.get(existingPlacementId) : null;
+  const existingAsset = existingPlacement ? assets.get(existingPlacement.assetId) : null;
 
   const src =
     res.inWorkspace && boardId && res.workspaceRelPath
       ? cameoUrl(boardId, res.workspaceRelPath)
       : "";
+
+  // First-frame still: the backend extracts (and shares with the canvas) a
+  // content-addressed poster for in-workspace videos. Without it the <video>
+  // is blank until played in WKWebView. Fall back to the on-canvas asset's
+  // posterPath so a poster the canvas backfilled AFTER a late ffmpeg install
+  // shows in chat too (reactive — no cache to invalidate); same JPEG either way.
+  const posterRel = res.posterRelPath ?? existingAsset?.posterPath ?? null;
+  const poster = res.inWorkspace && boardId && posterRel ? cameoUrl(boardId, posterRel) : undefined;
 
   return (
     <span className="cm-chatvid-wrap">
@@ -61,6 +76,7 @@ export function ChatInlineVideo({ res, basename }: { res: ChatImageResolution; b
             ref={videoRef}
             className="cm-chatvid"
             src={src}
+            poster={poster}
             controls={started}
             preload="metadata"
             muted

@@ -904,6 +904,14 @@ pub struct ChatImageResolution {
     /// Relative to the workspace folder, when `in_workspace`. The UI uses
     /// this with `cameoUrl(boardId, relPath)` to load the full image.
     workspace_rel_path: Option<String>,
+    /// Board-relative path to a video's first-frame poster JPEG
+    /// (`.cameo/posters/<hash>.jpg`), for IN-WORKSPACE videos only. The chat
+    /// renderer loads it with `cameoUrl(boardId, posterRelPath)` as the
+    /// `<video poster>` so the still shows before playback — a bare `<video>`
+    /// paints blank until played in WKWebView. `None` for images, out-of-
+    /// workspace videos, or when ffmpeg can't extract a frame. Same content-
+    /// addressed file the canvas renders (one extraction, shared).
+    poster_rel_path: Option<String>,
     /// Base64-encoded JPEG thumbnail (max side 240 px) for OUT-OF-workspace
     /// images, where the Cameo image protocol won't reach. Generated once per
     /// resolve and cached in the JS chat store.
@@ -968,6 +976,7 @@ pub fn resolve_chat_image(
             media_kind: String::new(),
             in_workspace: false,
             workspace_rel_path: None,
+            poster_rel_path: None,
             thumb_data_url: None,
             existing_placement_id: None,
             error: Some(
@@ -994,13 +1003,31 @@ pub fn resolve_chat_image(
         None
     };
 
-    let existing_placement_id = assets::hash_file_hex(&canonical).ok().and_then(|asset_id| {
+    // The blake3 content hash drives BOTH the existing-placement lookup and the
+    // video poster path (`.cameo/posters/<hash>.jpg`) — so compute it once.
+    let asset_id = assets::hash_file_hex(&canonical).ok();
+
+    let existing_placement_id = asset_id.as_ref().and_then(|asset_id| {
         let doc = entry.doc.lock();
         doc.placements
             .iter()
-            .find(|p| p.asset_id == asset_id)
+            .find(|p| &p.asset_id == asset_id)
             .map(|p| p.id.clone())
     });
+
+    // In-workspace videos get a first-frame poster so the chat renderer can show
+    // a still before playback (a bare `<video>` paints blank until played in
+    // WKWebView). Reuses the canvas's content-addressed poster — extraction is a
+    // no-op if it already exists (the agent-output mint usually wrote it), and a
+    // graceful `None` if ffmpeg is unavailable. Out-of-workspace videos can't be
+    // served via cameo:// at all, so they keep showing a chip.
+    let poster_rel_path = if in_workspace && is_video {
+        asset_id
+            .as_ref()
+            .and_then(|id| assets::extract_video_poster(&entry.folder, &canonical, id))
+    } else {
+        None
+    };
 
     // Out-of-workspace images can't be loaded through the Cameo image protocol
     // (which is scoped to one board folder); inline them as a base64 thumbnail
@@ -1030,6 +1057,7 @@ pub fn resolve_chat_image(
         media_kind: media_kind.to_string(),
         in_workspace,
         workspace_rel_path,
+        poster_rel_path,
         thumb_data_url,
         existing_placement_id,
         error: None,

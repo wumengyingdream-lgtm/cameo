@@ -226,6 +226,10 @@ export interface ChatImageResolution {
   mediaKind: string;
   inWorkspace: boolean;
   workspaceRelPath: string | null;
+  /** Board-relative first-frame poster JPEG for in-workspace videos
+   *  (`.cameo/posters/<hash>.jpg`); used as the chat `<video poster>` so the
+   *  still shows before playback. null for images / out-of-workspace / no ffmpeg. */
+  posterRelPath: string | null;
   thumbDataUrl: string | null;
   existingPlacementId: string | null;
   error: string | null;
