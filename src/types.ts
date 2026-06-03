@@ -85,6 +85,8 @@ export interface WorkspaceEntry {
   name: string;
   kind: "app" | "external";
   lastOpened: number;
+  /** Last real activity (a chat turn); the sidebar sort key. */
+  lastActive: number;
 }
 
 export interface SessionMeta {

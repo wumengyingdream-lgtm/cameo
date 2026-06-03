@@ -18,7 +18,14 @@ pub struct WorkspaceEntry {
     pub name: String,
     /// "app" (under the default area) | "external" (a user folder).
     pub kind: String,
+    /// When the folder was last opened/selected. Kept for reference, but NOT the
+    /// sort key — merely opening a workspace must not reshuffle the list.
     pub last_opened: i64,
+    /// Last *real* activity (a chat turn). This is the sort key, so the list
+    /// reorders only when you actually interact with a workspace. `serde(default)`
+    /// + the `list()` fallback migrate indexes written before this field existed.
+    #[serde(default)]
+    pub last_active: i64,
 }
 
 fn index_path() -> PathBuf {
@@ -61,28 +68,63 @@ fn kind_for(path: &Path) -> String {
     }
 }
 
-/// Recent workspaces (most-recent first), dropping any whose folder vanished.
+/// Sort key: real activity, newest first. Legacy entries written before
+/// `last_active` existed carry 0 here — fall back to `last_opened` so upgrading
+/// doesn't scramble the existing order until real activity re-sorts it.
+fn activity_key(e: &WorkspaceEntry) -> i64 {
+    if e.last_active > 0 {
+        e.last_active
+    } else {
+        e.last_opened
+    }
+}
+
+/// Recent workspaces (most-active first), dropping any whose folder vanished.
 pub fn list() -> Vec<WorkspaceEntry> {
     let mut entries: Vec<WorkspaceEntry> =
         read_index().into_iter().filter(|e| Path::new(&e.path).is_dir()).collect();
-    entries.sort_by(|a, b| b.last_opened.cmp(&a.last_opened));
+    entries.sort_by(|a, b| activity_key(b).cmp(&activity_key(a)));
     entries
 }
 
 /// Upsert (called on every open): refresh lastOpened + name/path, keyed by id.
+/// Deliberately does NOT bump `last_active` for an existing entry — opening a
+/// workspace must not move it in the list. A brand-new entry seeds last_active=now
+/// so a freshly created/added workspace surfaces at the top until it earns its
+/// own activity (see `mark_active`).
 pub fn touch(id: &str, folder: &Path, name: &str) {
     let mut entries = read_index();
     let path = folder.to_string_lossy().to_string();
     let kind = kind_for(folder);
+    let now = now_ms();
     if let Some(e) = entries.iter_mut().find(|e| e.id == id) {
         e.path = path;
         e.name = name.to_string();
         e.kind = kind;
-        e.last_opened = now_ms();
+        e.last_opened = now;
     } else {
-        entries.push(WorkspaceEntry { id: id.into(), path, name: name.into(), kind, last_opened: now_ms() });
+        entries.push(WorkspaceEntry {
+            id: id.into(),
+            path,
+            name: name.into(),
+            kind,
+            last_opened: now,
+            last_active: now,
+        });
     }
     write_index(&entries);
+}
+
+/// Bump `last_active` to now — called on a real chat turn so *activity*, not mere
+/// opening, drives list order. Keyed by folder path (the runtime knows the board's
+/// folder, not its index id). No-op if the folder isn't indexed.
+pub fn mark_active(folder: &Path) {
+    let target = folder.to_string_lossy();
+    let mut entries = read_index();
+    if let Some(e) = entries.iter_mut().find(|e| e.path == target) {
+        e.last_active = now_ms();
+        write_index(&entries);
+    }
 }
 
 pub fn rename(id: &str, name: &str) {

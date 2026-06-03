@@ -16,7 +16,7 @@ use crate::board::{self, BoardRegistry};
 use crate::prompt;
 use crate::runtime::{CodexEventEnvelope, PlanStep, UnifiedEvent, CODEX_EVENT};
 use crate::session;
-use crate::{assets, storage};
+use crate::{assets, storage, workspace};
 use base64::Engine;
 use parking_lot::Mutex as PlMutex;
 use serde_json::{json, Value};
@@ -1476,6 +1476,9 @@ fn persist_user_record(inner: &CodexSessionInner, text: &str, refs: &[String]) {
         "refs": refs,
     });
     session::append_message(&inner.folder, &session_id, &msg);
+    // A user turn is the real "last action" — bump the workspace so the sidebar
+    // sorts by activity, not by which folder was last merely opened.
+    workspace::mark_active(&inner.folder);
 }
 
 fn visible_user_text(text: &str, skills: &[SkillRef]) -> String {
