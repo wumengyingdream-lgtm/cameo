@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FileText, FolderOpen, Film, ImagePlus, Maximize } from "lucide-react";
+import { FileText, FolderOpen, Film, ImagePlus, Maximize, Play } from "lucide-react";
 import { useBoardStore } from "../store/board";
 import { useComposerStore } from "../store/composer";
 import { cameoUrl, ipc } from "../lib/ipc";
@@ -7,18 +7,31 @@ import type { ChatImageResolution } from "../lib/ipc";
 import { useT } from "../i18n/locale";
 
 /**
- * Renders a video path the AI emitted in chat text as a small inline `<video>`
- * with native controls. The video modality's chat counterpart to
- * ChatInlineImage — in-workspace videos load through the Cameo image protocol
- * (which serves Range requests, so the player can seek); out-of-workspace videos
- * show a chip (no cheap inline still without writing a poster). Right-click
- * bridges the artifact back into the canvas/reference loop, same as images.
+ * Renders a video path the AI emitted in chat text as a small inline player.
+ * The video modality's chat counterpart to ChatInlineImage: width-constrained
+ * like an image thumbnail, and — like the canvas — it shows the FIRST FRAME as
+ * a still by default (no autoplay, no always-on chrome) with a play overlay;
+ * clicking starts playback and reveals native controls. In-workspace videos
+ * load through the Cameo image protocol (which serves Range requests, so the
+ * player can seek); out-of-workspace videos show a chip (no protocol reach).
+ * Right-click bridges the artifact back into the canvas/reference loop.
+ *
+ * The first-frame still comes from the `poster` attribute (the same
+ * content-addressed JPEG the canvas renders, resolved by the backend), NOT from
+ * `preload="metadata"` — a bare `<video>` paints blank until played in
+ * WKWebView, so the poster is what makes the still appear.
  */
 export function ChatInlineVideo({ res, basename }: { res: ChatImageResolution; basename: string }) {
+  const t = useT();
   const boardId = useBoardStore((s) => s.boardId);
   const placements = useBoardStore((s) => s.placements);
+  const assets = useBoardStore((s) => s.assets);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [addedPlacementId, setAddedPlacementId] = useState<string | null>(null);
+  // Click-to-play: until the user starts it, the element shows its first-frame
+  // poster (see `poster` below) with a play badge and no chrome.
+  const [started, setStarted] = useState(false);
 
   const onContext = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -26,27 +39,56 @@ export function ChatInlineVideo({ res, basename }: { res: ChatImageResolution; b
     setMenu({ x: e.clientX, y: e.clientY });
   };
 
+  const start = () => {
+    setStarted(true);
+    void videoRef.current?.play().catch(() => {});
+  };
+
   const existingPlacementId = addedPlacementId ?? res.existingPlacementId ?? null;
   const existingPlacement = existingPlacementId ? placements.get(existingPlacementId) : null;
+  const existingAsset = existingPlacement ? assets.get(existingPlacement.assetId) : null;
 
   const src =
     res.inWorkspace && boardId && res.workspaceRelPath
       ? cameoUrl(boardId, res.workspaceRelPath)
       : "";
 
+  // First-frame still: the backend extracts (and shares with the canvas) a
+  // content-addressed poster for in-workspace videos. Without it the <video>
+  // is blank until played in WKWebView. Fall back to the on-canvas asset's
+  // posterPath so a poster the canvas backfilled AFTER a late ffmpeg install
+  // shows in chat too (reactive — no cache to invalidate); same JPEG either way.
+  const posterRel = res.posterRelPath ?? existingAsset?.posterPath ?? null;
+  const poster = res.inWorkspace && boardId && posterRel ? cameoUrl(boardId, posterRel) : undefined;
+
   return (
     <span className="cm-chatvid-wrap">
       {src ? (
-        <video
-          className="cm-chatvid"
-          src={src}
-          controls
-          preload="metadata"
-          muted
-          playsInline
+        <span
+          className="cm-chatvid-frame"
           onContextMenu={onContext}
+          onClick={() => { if (!started) start(); }}
+          role="button"
+          aria-label={t("vid.play")}
           title={basename}
-        />
+        >
+          <video
+            ref={videoRef}
+            className="cm-chatvid"
+            src={src}
+            poster={poster}
+            controls={started}
+            preload="metadata"
+            muted
+            playsInline
+            onPlay={() => setStarted(true)}
+          />
+          {!started && (
+            <span className="cm-chatvid-play" aria-hidden="true">
+              <Play size={20} fill="currentColor" strokeWidth={0} />
+            </span>
+          )}
+        </span>
       ) : (
         // Out-of-workspace: no protocol reach. Offer the chip + "add to canvas".
         <span className="cm-chatimg cm-chatimg--missing" onContextMenu={onContext} title={res.absPath}>

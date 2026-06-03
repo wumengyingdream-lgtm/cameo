@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CanvasScene, type CanvasContextTarget } from "./scene";
 import { useUiStore } from "../store/ui";
 import { useBoardStore } from "../store/board";
+import { useClipboardStore, CAMEO_CLIP_MARKER } from "../store/clipboard";
+import { useVideoPlaybackStore } from "../store/videoPlayback";
 import { useHistoryStore } from "../store/history";
 import { useWorkspaceStore } from "../store/workspace";
-import { ipc } from "../lib/ipc";
+import type { ClipItem } from "../types";
 import { SelectionBar } from "../components/SelectionBar";
 import { CropOverlay } from "../components/CropOverlay";
 import { VideoOverlay } from "./VideoOverlay";
@@ -58,6 +60,17 @@ export function CameoCanvas() {
       onStats: (s) => alive && useUiStore.getState().setStats(s),
       onSelectionChange: (ids) => alive && useBoardStore.getState().setSelection(ids),
       onSpacePanChange: (active) => alive && useUiStore.getState().setSpaceHand(active),
+      onSpacebar: () => {
+        if (!alive) return false;
+        // A focused on-canvas video gets spacebar for play/pause (it registered
+        // its controls); otherwise let the scene use space for transient pan.
+        const pb = useVideoPlaybackStore.getState();
+        if (pb.placementId && pb.toggle) {
+          pb.toggle();
+          return true;
+        }
+        return false;
+      },
       onCommitMoves: (u) => alive && void useBoardStore.getState().commitMoves(u),
       onAnnotate: (id, shapes) => alive && useBoardStore.getState().setAnnotation(id, shapes),
       onRename: (id, name) => alive && void useBoardStore.getState().renameAsset(id, name),
@@ -215,10 +228,30 @@ export function CameoCanvas() {
       }
       if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C")) {
         const b = useBoardStore.getState();
-        const first = [...b.selection][0];
-        if (b.boardId && first) {
-          e.preventDefault();
-          void ipc.copyImage(b.boardId, first);
+        if (!b.boardId || b.selection.size === 0) return;
+        e.preventDefault();
+        // Copy the WHOLE selection (images + videos) into the in-app clipboard
+        // by source path + transform, so paste re-imports all of them — even
+        // across boards. The OS clipboard separately gets the first image for
+        // external-app interop (videos can't rasterize to a bitmap).
+        const items: ClipItem[] = [];
+        for (const id of b.selection) {
+          const p = b.placements.get(id);
+          const a = p && b.assets.get(p.assetId);
+          if (!p || !a) continue;
+          items.push({ assetPath: a.path, x: p.x, y: p.y, scale: p.scale, rotation: p.rotation, crop: p.crop });
+        }
+        if (items.length) {
+          useClipboardStore.getState().set(b.boardId, items);
+          // Stamp the OS clipboard so paste can tell this in-app copy is the most
+          // recent one (vs. an image copied elsewhere afterwards). Track success:
+          // if writeText is unavailable/denied, paste falls back to the in-app
+          // store instead of silently dropping the copy. External image interop
+          // lives on the explicit "Copy image" action in SelectionBar.
+          navigator.clipboard
+            .writeText(CAMEO_CLIP_MARKER)
+            .then(() => useClipboardStore.getState().setMarked(true))
+            .catch(() => useClipboardStore.getState().setMarked(false));
         }
         return;
       }
@@ -227,6 +260,9 @@ export function CameoCanvas() {
           e.preventDefault();
           void useBoardStore.getState().deleteSelected();
         }
+      } else if (e.metaKey || e.ctrlKey) {
+        // Bare-letter tool shortcuts must not fire for Cmd/Ctrl combos
+        // (e.g. Cmd+V paste would otherwise also switch to the Select tool).
       } else if (e.key === "v" || e.key === "V") {
         useUiStore.getState().setTool("select");
       } else if (e.key === "h" || e.key === "H") {

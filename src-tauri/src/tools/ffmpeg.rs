@@ -350,6 +350,45 @@ pub fn extract_poster(video: &Path, out: &Path) -> bool {
     false
 }
 
+/// Extract the frame at `at_seconds` to `out` as PNG (lossless — the agent reads
+/// this still as a reference). Returns false if ffmpeg is missing or extraction
+/// failed. Same temp-then-rename safety as `extract_poster`. `-ss` before `-i`
+/// is a fast, accurate input seek in modern ffmpeg.
+pub fn extract_frame_at(video: &Path, out: &Path, at_seconds: f64) -> bool {
+    let Some(tools) = resolved() else {
+        return false;
+    };
+    let dir = match out.parent() {
+        Some(d) => {
+            let _ = std::fs::create_dir_all(d);
+            d.to_path_buf()
+        }
+        None => return false,
+    };
+    // Keep a `.png` extension so ffmpeg infers the PNG muxer (see extract_poster).
+    // Prefix `.overlay-` so a crash between write and rename leaves an orphan the
+    // board-open `sweep_overlays` reclaims (it only matches `.overlay-*.png`).
+    let tmp = dir.join(format!(".overlay-frameref-tmp-{}.png", nanoid::nanoid!(8)));
+    let ss = format!("{:.3}", at_seconds.max(0.0));
+    let mut cmd = Command::new(&tools.ffmpeg);
+    cmd.args(["-y", "-loglevel", "error", "-ss"])
+        .arg(&ss)
+        .arg("-i")
+        .arg(video)
+        .args(["-frames:v", "1"])
+        .arg(&tmp);
+    crate::process::hide_console_window(&mut cmd);
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let ok = matches!(output_with_deadline(cmd, PROBE_TIMEOUT), Some((s, _)) if s.success())
+        && tmp.is_file();
+    if ok && std::fs::rename(&tmp, out).is_ok() {
+        return true;
+    }
+    let _ = std::fs::remove_file(&tmp);
+    false
+}
+
 // ── Install (R2 pinned build) ────────────────────────────────────────────────
 
 #[derive(Serialize, Clone)]
@@ -591,11 +630,22 @@ async fn install_inner(app: &AppHandle) -> Result<(), String> {
         )
     })?;
 
-    let manifest: Value = crate::net::client()
+    let resp = crate::net::client()
         .get(MANIFEST_URL)
         .send()
         .await
-        .map_err(|e| format!("manifest fetch failed: {e}"))?
+        .map_err(|e| format!("manifest fetch failed: {e}"))?;
+    // Check status BEFORE parsing (mirrors download_verified): a 404 means the
+    // managed-download channel isn't published yet, and its text/plain body
+    // would otherwise surface as a cryptic "manifest parse failed" JSON error.
+    // The user's own PATH ffmpeg still works (detect-first) — say so.
+    if resp.status().as_u16() == 404 {
+        return Err("ffmpeg download isn't available yet — install ffmpeg yourself (e.g. `brew install ffmpeg`) and Cameo will detect it automatically".into());
+    }
+    if !resp.status().is_success() {
+        return Err(format!("manifest fetch HTTP {}", resp.status()));
+    }
+    let manifest: Value = resp
         .json()
         .await
         .map_err(|e| format!("manifest parse failed: {e}"))?;

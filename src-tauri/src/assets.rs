@@ -125,8 +125,10 @@ pub fn mint_asset(folder: &Path, rel_path: &str, origin: Origin) -> Result<Asset
 /// Extract (or reuse) the first-frame poster for a video into the Board sidecar
 /// (`.cameo/posters/<hash>.jpg`). Returns the board-relative path, or `None`
 /// when ffmpeg is unavailable / extraction failed. Content-addressed by the
-/// video's hash so re-minting identical bytes reuses one poster.
-fn extract_video_poster(folder: &Path, video_abs: &Path, id: &str) -> Option<String> {
+/// video's hash so re-minting identical bytes reuses one poster. Shared with the
+/// chat resolver (`resolve_chat_image`) so a chat-inlined video shows the SAME
+/// first-frame still the canvas renders, from one extraction.
+pub(crate) fn extract_video_poster(folder: &Path, video_abs: &Path, id: &str) -> Option<String> {
     let rel = format!(".cameo/posters/{id}.jpg");
     let out = folder.join(&rel);
     if out.is_file() {
@@ -226,7 +228,9 @@ pub fn import_bytes(
     if let Some(a) = existing.iter().find(|a| a.id == id) {
         return Ok(a.clone());
     }
-    let ext = if is_image_ext(ext) { ext } else { "png" };
+    // Keep a known image/video extension (clipboard paste can carry a video);
+    // anything else falls back to png so a bogus ext can't poison the filename.
+    let ext = if is_media_ext(ext) { ext } else { "png" };
     let rel = timestamped_name(folder, stem, ext);
     std::fs::write(folder.join(&rel), bytes)
         .with_context(|| format!("write {}", folder.join(&rel).display()))?;

@@ -85,6 +85,8 @@ export interface WorkspaceEntry {
   name: string;
   kind: "app" | "external";
   lastOpened: number;
+  /** Last real activity (a chat turn); the sidebar sort key. */
+  lastActive: number;
 }
 
 export interface SessionMeta {
@@ -103,6 +105,18 @@ export interface SessionsDoc {
 export interface ImportResult {
   assets: Asset[];
   placements: Placement[];
+}
+
+/** One placement carried in the in-app canvas clipboard (mirrors Rust
+ *  `PasteItem`). `assetPath` is relative to the source board's folder; the
+ *  transform is the source placement's, preserved across paste. */
+export interface ClipItem {
+  assetPath: string;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  crop?: Rect;
 }
 
 export interface PlacementUpdate {

@@ -172,8 +172,13 @@ pnpm tauri dev                  # 有 UI 改动时烟测
 - **OQ-6 文件夹↔画布同步语义**。
 - **OQ-D1 画布底色辨识度**：浅底 `#F5F5F7` 已上线，看用户反馈再决定要不要给浅色图加描边。
 - **视频模态（v0.1.8 已实现，commit `76a61f3`）** —— Codex×ffmpeg；细节见 `specs/prd/prd_0.1.8_video.md`。
-  **待 maintainer**：① 部署 R2 ffmpeg manifest（`publish_ffmpeg.sh`）——未部署前自动下载不可用，
-  只能用用户自备 PATH 的 ffmpeg；② GPL 源码托管 + H.264/HEVC 专利复核；③ 真 Windows 验证；④ GUI 烟测。
+  - ✅ **① R2 ffmpeg manifest 已部署**（2026-06-03）：FFmpeg **8.1.1 GPLv3**，三平台 6 个二进制 +
+    官方源码包已上传 `cameo-gallery-images` bucket，`https://r.cameo.ink/tools/ffmpeg/manifest.json`
+    线上 200、blake3 端到端核对通过 → app「一键安装」已通。发布脚本 `publish_ffmpeg.sh` 已对齐
+    `publish_release.sh`（`.env` 凭据 + `:s3:`），并加 `--source-file` 让 GPL 源码随发布上传、`source` 链不悬空。
+  - ✅ **② GPL 源码托管已做**（随 manifest 一起传，`tools/ffmpeg/8.1.1/source/`）。
+  **待 maintainer**：H.264/HEVC **专利复核**（法律，仍需你拍）；③ 真 Windows 验证（二进制已传，未在真机跑过）；
+  ④ GUI 烟测；⑤ Windows 包偏大（gyan full-static，单 .exe ~217MB → Win 用户一键装下 ~434MB），如嫌大可换 essentials。
 
 **这些未定前不要擅自开工对应模块 —— 先问用户**。
 

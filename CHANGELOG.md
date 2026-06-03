@@ -3,6 +3,35 @@
 User-facing release notes for Cameo. This file describes what changed from a
 user's point of view, rather than listing internal implementation details.
 
+## [0.1.9] - 2026-06-04
+
+### Improvements
+
+- **Videos Codex makes now land on the canvas by themselves**: when you ask
+  Codex to create or edit a video, the result appears on your board and in the
+  chat the moment the turn finishes — no more digging the file out of the folder
+  and dragging it in yourself.
+- **Reference a video — or a single frame — in your prompt**: select a video and
+  hit **Reference** to bring it into the chat; scrub to a moment first and it
+  carries that exact frame and its timestamp, so you can point at "this pose" or
+  "this shot" and ask for a change.
+- **A proper video player on the canvas**: drag the progress bar to scrub with a
+  live frame preview, and press **Space** to play or pause the selected video.
+- **Copy and paste across boards — and many at once**: select any mix of images
+  and videos, **Cmd/Ctrl+C**, switch to another board, **Cmd/Ctrl+V**, and they
+  all come over keeping their layout. Pasting a video file copied from elsewhere
+  (e.g. Finder) now works too.
+- **Tidier videos in chat**: a video in the conversation is sized like an image
+  thumbnail and shows its first frame as a still you click to play, instead of a
+  large player that starts on its own.
+- **Workspaces sorted by recent activity**: the sidebar now lists boards by when
+  you last worked in them, not just when they were opened.
+- **Settings & video tools**: a community QR code and a developer footer in
+  Settings, and the managed ffmpeg download now works out of the box — with a
+  clear message when ffmpeg isn't available yet.
+
+---
+
 ## [0.1.8] - 2026-06-02
 
 ### Improvements

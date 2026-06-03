@@ -4,7 +4,7 @@
 use crate::board::{self, BoardEntry, BoardRegistry};
 use crate::codex::{self, CodexRegistry};
 use crate::model::{
-    Annotation, Asset, BoardDoc, BoardInfo, Origin, Placement, Shape, BOARD_DOC_VERSION,
+    Annotation, Asset, BoardDoc, BoardInfo, Origin, Placement, Rect, Shape, BOARD_DOC_VERSION,
 };
 use crate::paths::ensure_board_sidecar;
 use crate::session::{self, SessionsDoc};
@@ -268,6 +268,122 @@ pub fn import_image_bytes(
     })
 }
 
+/// One placement to paste, carried in the in-app canvas clipboard. `asset_path`
+/// is relative to the SOURCE board's folder; the transform is the source
+/// placement's, preserved so a pasted group keeps its layout.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasteItem {
+    pub asset_path: String,
+    pub x: f64,
+    pub y: f64,
+    pub scale: f64,
+    pub rotation: f64,
+    pub crop: Option<Rect>,
+}
+
+/// Offset a same-board paste so the copy doesn't land exactly on the original.
+const PASTE_CASCADE: f64 = 48.0;
+
+/// Paste placements (possibly copied from another board) into this board:
+/// copy each source file into the target folder (content-addressed, so dupes
+/// dedup), then place it at its remembered transform. Cross-board works because
+/// we re-import by file path; videos work because it's a file copy, not a
+/// rasterized clipboard bitmap. One undo step (the standard import undo).
+#[tauri::command]
+pub fn paste_into_board(
+    board_id: String,
+    source_board_id: Option<String>,
+    items: Vec<PasteItem>,
+    registry: State<Arc<BoardRegistry>>,
+) -> Result<ImportResult, String> {
+    let entry = registry.get(&board_id).ok_or("unknown board")?;
+    let source_folder = source_board_id
+        .as_deref()
+        .and_then(|id| registry.folder(id))
+        .ok_or("unknown source board")?;
+    let same_board = source_board_id.as_deref() == Some(board_id.as_str());
+
+    // Copy each source file into this folder OUTSIDE the doc lock (heavy IO:
+    // read + write + ffprobe/poster for videos). Stage (minted asset, item idx).
+    let mut known_assets = entry.doc.lock().assets.clone();
+    let mut staged: Vec<(Asset, usize)> = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        // `asset_path` is webview-supplied; confine it to the source folder (no
+        // absolute paths, no `..` escape) before reading — same guard the asset
+        // helpers use. A crafted payload otherwise reads arbitrary files.
+        let rel = match board_safe_rel_path(&item.asset_path) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(module = "commands", "paste {} rejected: {e}", item.asset_path);
+                continue;
+            }
+        };
+        let src = source_folder.join(&rel);
+        match assets::import_external(&entry.folder, &src, &known_assets) {
+            Ok(asset) => {
+                if !known_assets.iter().any(|a| a.id == asset.id) {
+                    known_assets.push(asset.clone());
+                }
+                staged.push((asset, i));
+            }
+            Err(e) => tracing::warn!(module = "commands", "paste {} failed: {e}", item.asset_path),
+        }
+    }
+    if staged.is_empty() {
+        return Ok(ImportResult {
+            assets: Vec::new(),
+            placements: Vec::new(),
+        });
+    }
+
+    with_doc_save(&entry, |doc| {
+        let mut out = ImportResult {
+            assets: Vec::new(),
+            placements: Vec::new(),
+        };
+        // Where the pasted group lands. Same board → a small cascade off the
+        // originals so the copy is visible. Cross board → flow into this board's
+        // batch area (below existing content), so it isn't dropped at the source
+        // board's coords (possibly far off-screen). Relative layout is preserved
+        // either way (one uniform shift of the whole group).
+        let (dx, dy) = if same_board {
+            (PASTE_CASCADE, PASTE_CASCADE)
+        } else {
+            let min_x = items.iter().map(|it| it.x).fold(f64::INFINITY, f64::min);
+            let min_y = items.iter().map(|it| it.y).fold(f64::INFINITY, f64::min);
+            if min_x.is_finite() && min_y.is_finite() {
+                (-min_x, board::next_batch_top(doc) - min_y)
+            } else {
+                (0.0, 0.0)
+            }
+        };
+        let base_z = doc.placements.iter().map(|p| p.z).max().unwrap_or(-1) + 1;
+        for (offset_i, (asset, item_idx)) in staged.iter().enumerate() {
+            if !doc.assets.iter().any(|a| a.id == asset.id) {
+                doc.assets.push(asset.clone());
+                out.assets.push(asset.clone());
+            }
+            let item = &items[*item_idx];
+            let placement = Placement {
+                id: nanoid::nanoid!(),
+                asset_id: asset.id.clone(),
+                x: item.x + dx,
+                y: item.y + dy,
+                scale: item.scale,
+                rotation: item.rotation,
+                z: base_z + offset_i as i64,
+                crop: item.crop.clone(),
+                parent_id: None,
+                from_op_id: None,
+            };
+            doc.placements.push(placement.clone());
+            out.placements.push(placement);
+        }
+        Ok(out)
+    })
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlacementUpdate {
@@ -459,6 +575,49 @@ pub fn extract_frame(
         out.placements.push(placement);
         Ok(out)
     })
+}
+
+/// Extract the frame at `at_seconds` of a video placement into a hidden temp in
+/// the Board root and return its board-relative path (PRD §17/F2). Used by the
+/// "reference" button when the user has scrubbed: the agent reads this still to
+/// see the exact moment (the prompt also carries the source video + timestamp).
+/// Named `.overlay-frameref-*` so it's swept on Board open like dispatch
+/// overlays, and lives in the root (NOT under the off-limits `.cameo/`) so the
+/// agent may read it. Errors if the placement isn't a video or ffmpeg is
+/// unavailable — the caller then falls back to a whole-file reference.
+#[tauri::command]
+pub fn reference_video_frame(
+    board_id: String,
+    placement_id: String,
+    at_seconds: f64,
+    registry: State<Arc<BoardRegistry>>,
+) -> Result<String, String> {
+    let entry = registry.get(&board_id).ok_or("unknown board")?;
+    let video_rel = {
+        let doc = entry.doc.lock();
+        let p = doc
+            .placements
+            .iter()
+            .find(|p| p.id == placement_id)
+            .ok_or("placement not found")?;
+        let a = doc
+            .assets
+            .iter()
+            .find(|a| a.id == p.asset_id)
+            .ok_or("asset not found")?;
+        if !a.mime.starts_with("video/") {
+            return Err("not a video".into());
+        }
+        a.path.clone()
+    };
+    let video_abs = entry.folder.join(&video_rel);
+    let name = format!(".overlay-frameref-{}.png", nanoid::nanoid!(8));
+    let out = entry.folder.join(&name);
+    if crate::tools::ffmpeg::extract_frame_at(&video_abs, &out, at_seconds) {
+        Ok(name)
+    } else {
+        Err("frame extraction failed (ffmpeg unavailable?)".into())
+    }
 }
 
 /// Backfill video metadata + posters for assets minted while ffmpeg was
@@ -755,6 +914,14 @@ pub struct ChatImageResolution {
     /// Relative to the workspace folder, when `in_workspace`. The UI uses
     /// this with `cameoUrl(boardId, relPath)` to load the full image.
     workspace_rel_path: Option<String>,
+    /// Board-relative path to a video's first-frame poster JPEG
+    /// (`.cameo/posters/<hash>.jpg`), for IN-WORKSPACE videos only. The chat
+    /// renderer loads it with `cameoUrl(boardId, posterRelPath)` as the
+    /// `<video poster>` so the still shows before playback — a bare `<video>`
+    /// paints blank until played in WKWebView. `None` for images, out-of-
+    /// workspace videos, or when ffmpeg can't extract a frame. Same content-
+    /// addressed file the canvas renders (one extraction, shared).
+    poster_rel_path: Option<String>,
     /// Base64-encoded JPEG thumbnail (max side 240 px) for OUT-OF-workspace
     /// images, where the Cameo image protocol won't reach. Generated once per
     /// resolve and cached in the JS chat store.
@@ -819,6 +986,7 @@ pub fn resolve_chat_image(
             media_kind: String::new(),
             in_workspace: false,
             workspace_rel_path: None,
+            poster_rel_path: None,
             thumb_data_url: None,
             existing_placement_id: None,
             error: Some(
@@ -845,13 +1013,31 @@ pub fn resolve_chat_image(
         None
     };
 
-    let existing_placement_id = assets::hash_file_hex(&canonical).ok().and_then(|asset_id| {
+    // The blake3 content hash drives BOTH the existing-placement lookup and the
+    // video poster path (`.cameo/posters/<hash>.jpg`) — so compute it once.
+    let asset_id = assets::hash_file_hex(&canonical).ok();
+
+    let existing_placement_id = asset_id.as_ref().and_then(|asset_id| {
         let doc = entry.doc.lock();
         doc.placements
             .iter()
-            .find(|p| p.asset_id == asset_id)
+            .find(|p| &p.asset_id == asset_id)
             .map(|p| p.id.clone())
     });
+
+    // In-workspace videos get a first-frame poster so the chat renderer can show
+    // a still before playback (a bare `<video>` paints blank until played in
+    // WKWebView). Reuses the canvas's content-addressed poster — extraction is a
+    // no-op if it already exists (the agent-output mint usually wrote it), and a
+    // graceful `None` if ffmpeg is unavailable. Out-of-workspace videos can't be
+    // served via cameo:// at all, so they keep showing a chip.
+    let poster_rel_path = if in_workspace && is_video {
+        asset_id
+            .as_ref()
+            .and_then(|id| assets::extract_video_poster(&entry.folder, &canonical, id))
+    } else {
+        None
+    };
 
     // Out-of-workspace images can't be loaded through the Cameo image protocol
     // (which is scoped to one board folder); inline them as a base64 thumbnail
@@ -881,6 +1067,7 @@ pub fn resolve_chat_image(
         media_kind: media_kind.to_string(),
         in_workspace,
         workspace_rel_path,
+        poster_rel_path,
         thumb_data_url,
         existing_placement_id,
         error: None,

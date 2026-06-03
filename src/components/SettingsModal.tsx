@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { AlertCircle, CheckCircle2, Loader2, X } from "lucide-react";
 import { useSettingsStore } from "../store/settings";
 import { useBoardStore } from "../store/board";
@@ -295,9 +296,91 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           <FfmpegSection />
 
           <VersionSection />
+
+          <AboutFooterSection />
         </div>
       </div>
     </div>
+  );
+}
+
+const CAMEO_WEBSITE = "https://cameo.ink";
+const CAMEO_CONTACT = "myagents.io@gmail.com";
+const CAMEO_GITHUB = "https://github.com/hAcKlyc/cameo";
+/** The WeChat group QR is the same image cameo.ink serves for the website's
+ *  download CTA. We reference it by URL (CSP is null, so the remote <img> loads
+ *  directly) rather than bundling it — `npm run qr:update` over in cameo_web
+ *  then refreshes both the site and every installed client at once, no release
+ *  needed. */
+const COMMUNITY_QR_URL = "https://cameo.ink/images/userfeedback_wechat_group_qr.webp";
+
+/** Bottom-of-settings "about" footer, mirroring the website footer: a WeChat
+ *  community-group QR card plus developer/contact links and a copyright line.
+ *  Kept separate from VersionSection so the version/update controls stay
+ *  focused. Links open in the system browser via the opener plugin. */
+function AboutFooterSection() {
+  const t = useT();
+  // The WeChat community group is China-only, so the QR card shows only when the
+  // UI is in Chinese; English users see just the developer/contact footer.
+  const lang = useLocaleStore((s) => s.lang);
+  // If the QR can't be fetched (offline / asset moved) hide the card rather than
+  // showing a broken-image glyph.
+  const [qrFailed, setQrFailed] = useState(false);
+
+  const open = (url: string) => {
+    void openUrl(url).catch(() => {});
+  };
+
+  return (
+    <>
+      {lang === "zh" && !qrFailed && (
+        <section className="cm-set-section cm-about-qr">
+          <p className="cm-about-qr__title">{t("settings.community")}</p>
+          <p className="cm-about-qr__desc">{t("settings.communityDesc")}</p>
+          <img
+            className="cm-about-qr__img"
+            src={COMMUNITY_QR_URL}
+            alt={t("settings.communityQrAlt")}
+            width={168}
+            height={168}
+            loading="lazy"
+            onError={() => setQrFailed(true)}
+          />
+        </section>
+      )}
+
+      <section className="cm-set-section cm-about-meta">
+        <div className="cm-about-meta__grid">
+          <div className="cm-about-meta__cell">
+            <p className="cm-about-meta__label">{t("settings.metaDeveloper")}</p>
+            <p className="cm-about-meta__value">Ethan L</p>
+          </div>
+          <div className="cm-about-meta__cell">
+            <p className="cm-about-meta__label">{t("settings.metaWebsite")}</p>
+            <button type="button" className="cm-about-meta__link" onClick={() => open(CAMEO_WEBSITE)}>
+              cameo.ink
+            </button>
+          </div>
+          <div className="cm-about-meta__cell">
+            <p className="cm-about-meta__label">{t("settings.metaContact")}</p>
+            <button
+              type="button"
+              className="cm-about-meta__link"
+              onClick={() => open(`mailto:${CAMEO_CONTACT}`)}
+            >
+              {CAMEO_CONTACT}
+            </button>
+          </div>
+          <div className="cm-about-meta__cell">
+            <p className="cm-about-meta__label">{t("settings.metaGithub")}</p>
+            <button type="button" className="cm-about-meta__link" onClick={() => open(CAMEO_GITHUB)}>
+              github.com/hAcKlyc/cameo
+            </button>
+          </div>
+        </div>
+        <p className="cm-about-meta__copyright">© 2026 Ethan L. All rights reserved.</p>
+      </section>
+    </>
   );
 }
 

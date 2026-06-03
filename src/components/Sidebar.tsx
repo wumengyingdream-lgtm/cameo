@@ -98,8 +98,15 @@ function WorkspaceRow({ w, active }: { w: WorkspaceEntry; active: boolean }) {
 export function Sidebar() {
   const sidebarOpen = useWorkspaceStore((s) => s.sidebarOpen);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const refresh = useWorkspaceStore((s) => s.refresh);
   const activeId = useBoardStore((s) => s.boardId);
   const t = useT();
+  // Re-fetch each time the panel opens so the list reflects activity-based order
+  // (a turn since last view may have floated a workspace up); ordering is by real
+  // activity now, so this never jumps mid-interaction.
+  useEffect(() => {
+    if (sidebarOpen) void refresh();
+  }, [sidebarOpen, refresh]);
   if (!sidebarOpen) return null;
   return (
     <div className="cm-sidebar">

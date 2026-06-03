@@ -1259,6 +1259,48 @@ body.cm-chat-resizing {
   width: 120px;
   height: 80px;
 }
+/* Inline chat video: width-constrained like an image thumbnail, first-frame
+   still + play badge until clicked (then native controls). */
+.cm-chatvid-wrap {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 4px 0;
+}
+.cm-chatvid-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 260px;
+  border-radius: var(--cm-radius-md);
+  overflow: hidden;
+  border: 1px solid var(--cm-line);
+  background: var(--cm-gray-100);
+  line-height: 0;
+  cursor: pointer;
+}
+.cm-chatvid {
+  display: block;
+  max-width: 100%;
+  max-height: 340px;
+  object-fit: contain;
+}
+.cm-chatvid-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: background 0.12s ease;
+}
+.cm-chatvid-frame:hover .cm-chatvid-play {
+  background: rgba(0, 0, 0, 0.66);
+}
 /* Context menu variant for chat images — reuse base .cm-ctx style. */
 .cm-ctx--chatimg {
   min-width: 168px;
@@ -1423,6 +1465,17 @@ body.cm-chat-resizing {
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Timestamp badge on a video frame-reference pill (PRD §17/F6). */
+.cm-pill__ts {
+  flex: none;
+  margin-left: 1px;
+  padding: 0 5px;
+  border-radius: var(--cm-radius-pill);
+  background: rgba(255, 255, 255, 0.24);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 /* Inline variant — pills rendered INSIDE a red user-message bubble. The
    default red-bg/white-text pill would vanish against the bubble; flip to
@@ -2862,6 +2915,13 @@ body.cm-chat-resizing {
   gap: 8px;
   margin-top: 16px;
 }
+/* Both actions share the primary CTA's size so the row isn't lopsided — the
+   secondary (更新记录) would otherwise keep the smaller base .cm-btn padding/font.
+   Scoped to this row so primary/secondary pairs elsewhere are untouched. */
+.cm-set-update .cm-btn {
+  padding: 9px 16px;
+  font-size: 13px;
+}
 /* Inline download progress — occupies the same slot as the check button. */
 .cm-progress {
   display: flex;
@@ -2904,6 +2964,79 @@ body.cm-chat-resizing {
   font-variant-numeric: tabular-nums;
   color: var(--cm-fg-secondary);
   white-space: nowrap;
+}
+
+/* About footer — community QR + developer/contact. Unlike the editorial rows
+   above (title left / control right), these center or grid their content. */
+.cm-about-qr {
+  text-align: center;
+}
+.cm-about-qr__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--cm-fg);
+}
+.cm-about-qr__desc {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--cm-muted);
+}
+.cm-about-qr__img {
+  display: block;
+  width: 168px;
+  height: 168px;
+  margin: 16px auto 0;
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-lg);
+  background: var(--cm-surface);
+}
+/* Developer / contact: two-column meta grid + centered copyright. */
+.cm-about-meta__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px 20px;
+}
+.cm-about-meta__cell {
+  min-width: 0;
+}
+.cm-about-meta__label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--cm-muted);
+}
+.cm-about-meta__value {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--cm-fg);
+}
+/* Link rendered as a button (opener plugin), reset to inline text. */
+.cm-about-meta__link {
+  display: inline-block;
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--cm-accent-text);
+  text-align: left;
+  word-break: break-all;
+  cursor: pointer;
+}
+.cm-about-meta__link:hover {
+  text-decoration: underline;
+}
+.cm-about-meta__copyright {
+  margin: 20px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--cm-muted);
 }
 /* Inline connectivity line inside the proxy block — icon + colored text, no
    filled chip (the surrounding gray block already groups it). */
@@ -3849,9 +3982,9 @@ body.cm-chat-resizing {
   gap: 4px;
   padding: 5px 8px;
   background: var(--cm-surface);
-  border: 1px solid var(--cm-border);
+  border: 1px solid var(--cm-line);
   border-radius: var(--cm-radius-md);
-  box-shadow: var(--cm-shadow-lg);
+  box-shadow: var(--cm-shadow-3);
   pointer-events: auto;
   white-space: nowrap;
 }
@@ -3864,26 +3997,59 @@ body.cm-chat-resizing {
   border: none;
   border-radius: var(--cm-radius-sm);
   background: transparent;
-  color: var(--cm-ink);
+  color: var(--cm-fg);
   cursor: pointer;
 }
 .cm-vidip__btn:hover {
-  background: var(--cm-accent-soft);
+  background: var(--cm-accent-bg);
 }
 .cm-vidip__btn--accent {
   color: var(--cm-accent);
 }
+/* Drag scrubber (PRD §17/F4): a wide hit area so it's easy to grab; the inner
+   track is thin. Dragging seeks live (frame preview) and stays put on release. */
 .cm-vidip__scrub {
+  position: relative;
   width: 150px;
-  accent-color: var(--cm-accent);
+  height: 18px;
+  display: flex;
+  align-items: center;
   cursor: pointer;
+  touch-action: none;
+}
+.cm-vidip__scrub::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--cm-line);
+}
+.cm-vidip__scrub-fill {
+  position: absolute;
+  left: 0;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--cm-accent);
+  pointer-events: none;
+}
+.cm-vidip__scrub-knob {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--cm-accent);
+  box-shadow: var(--cm-shadow-1);
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 .cm-vidip__time {
   min-width: 76px;
   text-align: center;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  color: var(--cm-ink-muted);
+  color: var(--cm-muted);
 }
 
 /* ffmpeg install error line — red accent doubles as the error color in the
