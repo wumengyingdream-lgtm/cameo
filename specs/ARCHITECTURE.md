@@ -205,6 +205,11 @@ user 发第一条
   │    • 否则 base64 → import_bytes
   │    → 新 Asset + 新 Placement（在源右侧）+ 一条血缘
   └─ turn/completed
+       └─（status=completed）`ingest_turn_outputs`：扫 folder 顶层媒体文件 vs doc 已跟踪路径做 diff，
+          新增的——尤其 agent 用 bash/ffmpeg 产的、**没有结构化 imageGeneration 信号**的视频/图——
+          按与 imageGeneration 相同形状 mint + 右侧落 Placement + 血缘 + 发 `ImageGenerated`（落画布 + 对话卡片）。
+          这是「agent 产物入画布」的兜底通道（v0.1.9 / 更新 PRD 决策 E3「ingest 只走 agent 文本路径」；
+          仍非常驻 fs-watch，只每轮末 diff 一次，content-id 去重防重复，仅成功回合触发）。
 
 active turn 中继续发
   ├─ UI 立即追加用户消息，不把“正在生成”当成本地错误
