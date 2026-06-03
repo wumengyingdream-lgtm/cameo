@@ -75,6 +75,29 @@ function isBlankTextNode(node: Node | null): node is Text {
   return node?.nodeType === Node.TEXT_NODE && isBlankText(node.nodeValue ?? "");
 }
 
+/** The pill immediately before a (collapsed) position, skipping blank text /
+ *  caret sentinels. Null when real text — or nothing — precedes. Used to avoid
+ *  inserting a reference right next to an identical one (a consecutive
+ *  duplicate); the same item elsewhere in the text is fine. */
+function pillBefore(container: Node, offset: number): HTMLElement | null {
+  let node: Node | null;
+  if (container.nodeType === Node.TEXT_NODE) {
+    if (!isBlankText((container.nodeValue ?? "").slice(0, offset))) return null;
+    node = container.previousSibling;
+  } else {
+    node = container.childNodes[offset - 1] ?? null;
+  }
+  while (node && isBlankTextNode(node)) node = node.previousSibling;
+  return isPillNode(node) ? node : null;
+}
+
+/** The trailing pill at the very end of the editor (skipping blank text). */
+function trailingPill(editor: HTMLElement): HTMLElement | null {
+  let node: ChildNode | null = editor.lastChild;
+  while (node && isBlankTextNode(node)) node = node.previousSibling;
+  return isPillNode(node) ? node : null;
+}
+
 function editorHasMeaningfulContent(editor: HTMLElement): boolean {
   for (const node of editor.childNodes) {
     if (node.nodeType === Node.TEXT_NODE) {
@@ -429,6 +452,10 @@ export function Composer() {
       const range = anchorRange(editor);
       let lastPill: HTMLSpanElement | null = null;
       for (const id of ids) {
+        // Don't add a ghost that would sit right after an identical reference
+        // (e.g. re-clicking the image you just referenced) — consecutive dupes
+        // are avoided; the same item elsewhere in the text is fine.
+        if (pillBefore(range.startContainer, range.startOffset)?.dataset.pid === id) continue;
         const pill = makePill(id, true);
         range.insertNode(pill);
         range.setStartAfter(pill);
@@ -760,7 +787,14 @@ export function Composer() {
       // the END of the editor (after whatever the user has typed). Same DOM
       // shape as makePill, plus contentEditable=false so backspace deletes
       // it as one atom.
-      editor.focus();
+      editor.focus(); // commits the selection's auto-ghost (incl. this video's)
+      // If that leaves an identical reference as the trailing pill (the
+      // just-committed whole-file ghost of the video being referenced),
+      // replace it so "Reference" yields ONE pill reflecting the current state
+      // (whole file, or the scrubbed frame) instead of two adjacent dupes.
+      const trailing = trailingPill(editor);
+      if (trailing && trailing.dataset.pid === pendingPill.placementId) trailing.remove();
+      normalizeEmptyEditor(editor);
       const pill = makePill(pendingPill.placementId, false, pendingPill.frame);
       // Move caret to end, then insert the pill + a trailing space so the
       // user can immediately keep typing.
