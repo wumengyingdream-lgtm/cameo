@@ -12,7 +12,8 @@
 # It mirrors publish_release.sh (rclone → R2, optional CDN purge, HEAD verify).
 #
 # Usage:
-#   ./publish_ffmpeg.sh --version 7.1 --in ./ffmpeg-stage [--dry-run] [--local-only]
+#   ./publish_ffmpeg.sh --version 8.1.1 --in ./ffmpeg-stage \
+#       --source-file ./ffmpeg-8.1.1.tar.xz --accept-gpl [--dry-run] [--local-only]
 #
 # Input layout (--in DIR): one subdir per platform, each holding the two
 # binaries. Only the platforms present are published (partial sets are fine).
@@ -22,17 +23,28 @@
 # Platform keys MUST match src-tauri/src/tools/ffmpeg.rs::platform_key().
 #
 # GPL note (PRD §8.3): the full ffmpeg you ship is GPL (x264/x265) and may carry
-# H.264/HEVC patent obligations. Publishing here makes Cameo a distributor —
-# also upload the corresponding source and point `source` at it. This script
-# will refuse unless --accept-gpl is passed, so it can't be run unaware.
+# H.264/HEVC patent obligations. Publishing here makes Cameo a distributor — so
+# the corresponding source MUST be hosted and linked. Pass --source-file PATH to
+# upload the source tarball alongside the binaries (the manifest's `source` URL
+# is auto-derived from it, so it can't dangle), or --source-url if you host it
+# elsewhere. This script refuses unless --accept-gpl is passed, so it can't be
+# run unaware.
 #
-# Env (.env or shell), reused from publish_release.sh:
-#   CAMEO_R2_REMOTE       rclone remote name              (default: r2)
-#   CAMEO_R2_BUCKET       R2 bucket                       (default: cameo-dist)
-#   CAMEO_R2_PUBLIC_BASE  public base URL                 (default: https://r.cameo.ink)
+# R2 credentials come from .env — the SAME ones publish_release.sh uses
+# (loaded the SAME way: `set -a; . ./.env`), so a working release setup needs
+# zero extra config here:
+#   R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_ENDPOINT  (S3 creds)
+#   R2_BUCKET             R2 bucket the r.cameo.ink domain serves (default: cameo-gallery-images)
+#   CAMEO_R2_PUBLIC_BASE  public base URL                          (default: https://r.cameo.ink)
 #   CF_ZONE_ID/CF_API_TOKEN  optional Cloudflare cache purge
 #
-# Prereqs: rclone (configured R2 remote), b3sum (blake3 CLI — `brew install
+# Upload uses rclone's ad-hoc `:s3:` backend driven by RCLONE_S3_* env vars
+# (NOT a named remote) — identical to publish_release.sh, so no `rclone config`
+# is required. r.cameo.ink is the custom domain on the R2 bucket named in
+# R2_BUCKET (releases + gallery images already live there); the ffmpeg manifest
+# lands at the `tools/ffmpeg/` prefix in that same bucket.
+#
+# Prereqs: rclone (`brew install rclone`), b3sum (blake3 CLI — `brew install
 # b3sum` or `cargo install b3sum`). The hash MUST be blake3: the app rejects a
 # mismatch and never executes unverified bytes.
 
@@ -40,6 +52,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$ROOT/dist-ffmpeg" # manifest is always written here for inspection
+
+# Load R2 creds from .env exactly as publish_release.sh does. Best-effort so
+# --local-only works without it; the upload path validates the vars are present.
+if [[ -f "$ROOT/.env" ]]; then set -a; . "$ROOT/.env"; set +a; fi
 
 cyan() { printf '\033[36m%s\033[0m\n' "$1"; }
 yellow() { printf '\033[33m%s\033[0m\n' "$1"; }
@@ -53,11 +69,13 @@ DRY_RUN=0
 LOCAL_ONLY=0
 ACCEPT_GPL=0
 SOURCE_URL=""
+SOURCE_FILE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) VERSION="$2"; shift 2;;
     --in) IN_DIR="$2"; shift 2;;
     --source-url) SOURCE_URL="$2"; shift 2;;
+    --source-file) SOURCE_FILE="$2"; shift 2;;  # local GPL source tarball → uploaded + linked
     --dry-run) DRY_RUN=1; shift;;
     --local-only) LOCAL_ONLY=1; shift;;  # compute + emit manifest, no upload
     --accept-gpl) ACCEPT_GPL=1; shift;;
@@ -74,12 +92,28 @@ fi
 
 command -v b3sum >/dev/null 2>&1 || die "b3sum not found — install with 'brew install b3sum' or 'cargo install b3sum' (the app verifies blake3)"
 
-RCLONE_REMOTE="${CAMEO_R2_REMOTE:-r2}"
-R2_BUCKET="${CAMEO_R2_BUCKET:-cameo-dist}"
+# Bucket the r.cameo.ink custom domain serves (releases + images already live
+# there). Override via R2_BUCKET in .env/shell; default matches the live setup.
+R2_BUCKET="${R2_BUCKET:-cameo-gallery-images}"
 R2_PUBLIC_BASE="${CAMEO_R2_PUBLIC_BASE:-https://r.cameo.ink}"
 
+# --source-file: host the GPL corresponding-source tarball ourselves so the
+# manifest's `source` link can't dangle (the GPL obligation is only met if the
+# source is actually reachable). It's uploaded alongside the binaries and, unless
+# --source-url was given explicitly, becomes the source URL. SOURCE_REL is added
+# to UPLOADS after the array is initialized below.
+SOURCE_REL=""
+if [[ -n "$SOURCE_FILE" ]]; then
+  [[ -f "$SOURCE_FILE" ]] || die "source file not found: $SOURCE_FILE"
+  SOURCE_REL="tools/ffmpeg/$VERSION/source/$(basename "$SOURCE_FILE")"
+  [[ -n "$SOURCE_URL" ]] || SOURCE_URL="$R2_PUBLIC_BASE/$SOURCE_REL"
+fi
+
 if [[ "$LOCAL_ONLY" -ne 1 ]]; then
-  command -v rclone >/dev/null 2>&1 || die "rclone not found — install + configure an R2 remote (or use --local-only)"
+  command -v rclone >/dev/null 2>&1 || die "rclone not found — brew install rclone (or use --local-only)"
+  for v in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ENDPOINT R2_BUCKET; do
+    [[ -n "${!v:-}" ]] || die "$v missing — set it in .env (same creds publish_release.sh uses), or run with --local-only"
+  done
 fi
 
 cyan "Cameo ffmpeg publisher · v$VERSION"
@@ -93,15 +127,23 @@ size_of() { wc -c < "$1" | tr -d ' '; }
 FRAGMENTS=()
 UPLOADS=() # "src::dest-rel" pairs, uploaded after the manifest is built
 
+# NOTE: this is called inside $(…) command substitution, which runs in a
+# SUBSHELL — so it must NOT try to record uploads via `UPLOADS+=` (that write
+# would be lost; bash arrays don't propagate out of a subshell). The caller
+# tracks UPLOADS in the parent shell using the SAME rel path computed here.
 emit_tool() { # platform bin_name local_path  →  prints  "name": { url, blake3, size }
   local platform="$1" name="$2" path="$3"
-  local hash size rel url
+  local hash size url
   hash="$(b3_of "$path")"
   size="$(size_of "$path")"
-  rel="tools/ffmpeg/$VERSION/$platform/$(basename "$path")"
-  url="$R2_PUBLIC_BASE/$rel"
-  UPLOADS+=("$path::$rel")
+  url="$R2_PUBLIC_BASE/$(rel_for "$platform" "$path")"
   printf '      "%s": { "url": "%s", "blake3": "%s", "size": %s }' "$name" "$url" "$hash" "$size"
+}
+
+# Single source of truth for an object's R2 key, used by BOTH emit_tool (URL in
+# the manifest) and the parent-shell UPLOADS bookkeeping — they MUST agree.
+rel_for() { # platform local_path  →  prints  tools/ffmpeg/<ver>/<platform>/<basename>
+  printf 'tools/ffmpeg/%s/%s/%s' "$VERSION" "$1" "$(basename "$2")"
 }
 
 for platform in "${PLATFORMS[@]}"; do
@@ -119,9 +161,15 @@ for platform in "${PLATFORMS[@]}"; do
     "$(emit_tool "$platform" ffmpeg "$ff")" \
     "$(emit_tool "$platform" ffprobe "$fp")")"
   FRAGMENTS+=("$frag")
+  # Record uploads in the PARENT shell — emit_tool's subshell can't (see above).
+  UPLOADS+=("$ff::$(rel_for "$platform" "$ff")")
+  UPLOADS+=("$fp::$(rel_for "$platform" "$fp")")
 done
 
 [[ ${#FRAGMENTS[@]} -gt 0 ]] || die "no platforms found under $IN_DIR (expected mac-arm64/ mac-x64/ win-x64/)"
+
+# Queue the GPL source tarball for upload too (if --source-file was given).
+[[ -n "$SOURCE_REL" ]] && UPLOADS+=("$SOURCE_FILE::$SOURCE_REL")
 
 # ── build manifest (exact shape src-tauri/src/tools/ffmpeg.rs parses) ─────────
 # Join fragments with ",\n" BETWEEN them — never a trailing comma (invalid JSON;
@@ -158,17 +206,32 @@ if [[ "$LOCAL_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
-RCLONE_FLAGS=(--s3-no-check-bucket)
+# Configure rclone's ad-hoc `:s3:` backend via env vars — identical to
+# publish_release.sh (no named remote / `rclone config` needed). R2_ENDPOINT
+# contains "://", so it MUST go through the env var, never an inline
+# `:s3,endpoint=…:` connection string (rclone truncates that at the first colon).
+export RCLONE_S3_PROVIDER="Cloudflare"
+export RCLONE_S3_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+export RCLONE_S3_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+export RCLONE_S3_ENDPOINT="$R2_ENDPOINT"
+export RCLONE_S3_REGION="auto"
+# R2 tokens can't create buckets; skip rclone's pre-upload CreateBucket probe
+# (it'd 403) — the bucket already exists.
+export RCLONE_S3_NO_CHECK_BUCKET="true"
+
+RCLONE_FLAGS=()
 [[ "$DRY_RUN" -eq 1 ]] && RCLONE_FLAGS+=(--dry-run)
-dest_base="$RCLONE_REMOTE:$R2_BUCKET"
 
 upload() { # local_path  dest_rel
   local src="$1" rel="$2"
   cyan "  ↑ $rel"
-  rclone "${RCLONE_FLAGS[@]}" copyto "$src" "$dest_base/$rel" || die "upload failed: $src"
+  # `${arr[@]+"${arr[@]}"}` guard: on macOS's bash 3.2, expanding an EMPTY array
+  # under `set -u` aborts with "unbound variable" — this expands to nothing when
+  # RCLONE_FLAGS is empty (the normal, non-dry-run case) instead of erroring.
+  rclone --config /dev/null ${RCLONE_FLAGS[@]+"${RCLONE_FLAGS[@]}"} copyto "$src" ":s3:${R2_BUCKET}/${rel}" || die "upload failed: $src"
 }
 
-for pair in "${UPLOADS[@]}"; do
+for pair in ${UPLOADS[@]+"${UPLOADS[@]}"}; do
   upload "${pair%%::*}" "${pair##*::}"
 done
 upload "$MANIFEST" "tools/ffmpeg/manifest.json"

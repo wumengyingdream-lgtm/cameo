@@ -12,6 +12,11 @@ target/
 src-tauri/target/
 src-tauri/gen/schemas/
 
+# Managed-ffmpeg publish artifacts (publish_ffmpeg.sh): downloaded third-party
+# binaries staged for upload + the generated manifest. Build artifacts, never committed.
+dist-ffmpeg/
+dist-ffmpeg-stage/
+
 # Env / local secrets
 .env
 .env.*
