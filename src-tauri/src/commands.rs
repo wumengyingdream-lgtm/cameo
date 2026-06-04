@@ -1448,6 +1448,36 @@ pub fn export_asset(
     Ok(())
 }
 
+/// Write frontend-rendered export bytes to a Save dialog destination. Used when
+/// the canvas has editable overlays (for example text nodes) that need to be
+/// flattened into the exported image instead of copying the original asset.
+#[tauri::command]
+pub fn export_rendered_image(dest: String, bytes: Vec<u8>) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Err("empty export".into());
+    }
+    std::fs::write(PathBuf::from(dest), bytes).map_err(e2s)?;
+    Ok(())
+}
+
+/// Copy frontend-rendered PNG bytes to the system clipboard.
+#[tauri::command]
+pub fn copy_rendered_image(bytes: Vec<u8>) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Err("empty image".into());
+    }
+    let img = image::load_from_memory(&bytes).map_err(e2s)?.to_rgba8();
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let mut cb = arboard::Clipboard::new().map_err(e2s)?;
+    cb.set_image(arboard::ImageData {
+        width: w,
+        height: h,
+        bytes: std::borrow::Cow::Owned(img.into_raw()),
+    })
+    .map_err(e2s)?;
+    Ok(())
+}
+
 /// Export several selected Placement backing files into one destination folder.
 /// Filenames preserve the Asset's basename; collisions get a stable numeric
 /// suffix (`image.png`, `image 2.png`, ...).

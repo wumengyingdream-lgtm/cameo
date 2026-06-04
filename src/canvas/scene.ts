@@ -108,7 +108,6 @@ interface Node {
 
 interface TextSceneNode {
   container: Container;
-  background: Graphics;
   outline: Graphics;
   content: Text;
   w: number;
@@ -1029,13 +1028,12 @@ export class CanvasScene {
     container.eventMode = "static";
     container.cursor = this.spacePan || this.tool === "hand" ? "grab" : "move";
 
-    const background = new Graphics();
     const content = new Text({ text: t.text, style: this.textStyleOf(t) });
     content.anchor.set(0.5);
     const outline = new Graphics();
-    container.addChild(background, content, outline);
+    container.addChild(content, outline);
 
-    const node: TextSceneNode = { container, background, outline, content, w: t.w, h: t.h };
+    const node: TextSceneNode = { container, outline, content, w: t.w, h: t.h };
     container.on("pointerover", () => this.setHoveredNode(t.id));
     container.on("pointerout", () => this.setHoveredNode(null));
     container.on("pointerdown", (e: FederatedPointerEvent) => this.onTextPointerDown(t.id, e));
@@ -1071,15 +1069,7 @@ export class CanvasScene {
     node.container.scale.set(t.scale);
     node.container.rotation = t.rotation;
     node.container.zIndex = t.z;
-    this.drawTextBackground(node);
     this.redrawNodeOutline(t.id);
-  }
-
-  private drawTextBackground(node: TextSceneNode): void {
-    node.background.clear();
-    node.background
-      .roundRect(-node.w / 2, -node.h / 2, node.w, node.h, 6)
-      .fill({ color: 0xffffff, alpha: 0.72 });
   }
 
   private destroyTextNode(node: TextSceneNode): void {
@@ -1132,11 +1122,9 @@ export class CanvasScene {
     const x = -node.w / 2;
     const y = -node.h / 2;
     if (selected) {
-      g.roundRect(x, y, node.w, node.h, 6).stroke({ width: 2, color: ACCENT, alpha: 1 });
+      g.roundRect(x, y, node.w, node.h, 4).stroke({ width: 1, color: ACCENT, alpha: 0.72 });
     } else if (hovered) {
-      g.roundRect(x, y, node.w, node.h, 6).stroke({ width: 1.5, color: ACCENT, alpha: 0.42 });
-    } else {
-      g.roundRect(x, y, node.w, node.h, 6).stroke({ width: 1, color: 0x1a1a1c, alpha: 0.12 });
+      g.roundRect(x, y, node.w, node.h, 4).stroke({ width: 1, color: ACCENT, alpha: 0.28 });
     }
   }
 

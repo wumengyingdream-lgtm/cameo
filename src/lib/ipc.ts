@@ -130,8 +130,12 @@ export const ipc = {
     invoke<void>("reveal_in_finder", { boardId, placementId }),
   copyImage: (boardId: string, placementId: string) =>
     invoke<void>("copy_image", { boardId, placementId }),
+  copyRenderedImage: (bytes: number[]) =>
+    invoke<void>("copy_rendered_image", { bytes }),
   exportAsset: (boardId: string, placementId: string, dest: string) =>
     invoke<void>("export_asset", { boardId, placementId, dest }),
+  exportRenderedImage: (dest: string, bytes: number[]) =>
+    invoke<void>("export_rendered_image", { dest, bytes }),
   exportAssets: (boardId: string, placementIds: string[], destDir: string) =>
     invoke<string[]>("export_assets", { boardId, placementIds, destDir }),
 

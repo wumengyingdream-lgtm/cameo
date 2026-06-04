@@ -7,7 +7,7 @@ import { useComposerStore } from "../store/composer";
 import { useVideoPlaybackStore } from "../store/videoPlayback";
 import { ipc } from "../lib/ipc";
 import { isVideoAsset } from "../lib/media";
-import { PRESET_REMOVE_BG, PRESET_UPSCALE, runImagePreset, exportImage } from "../lib/imageActions";
+import { PRESET_REMOVE_BG, PRESET_UPSCALE, runImagePreset, exportImage, copyImageToClipboard } from "../lib/imageActions";
 import { useT } from "../i18n/locale";
 
 /** "M:SS" for a video position in seconds (the frame-reference pill badge). */
@@ -102,7 +102,7 @@ export function SelectionBar({ rootRef }: { rootRef: RefObject<HTMLDivElement | 
             {more && (
               <div className="cm-selbar__menu" onMouseLeave={() => setMore(false)}>
                 {!isVideo && (
-                  <button onClick={() => { setMore(false); void ipc.copyImage(boardId, first); }}>
+                  <button onClick={() => { setMore(false); void copyImageToClipboard(boardId, first); }}>
                     <Copy size={14} />
                     {t("img.copy")}
                   </button>

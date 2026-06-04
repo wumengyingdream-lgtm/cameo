@@ -6,7 +6,7 @@ import { useChatStore } from "../store/chat";
 import { useUiStore } from "../store/ui";
 import { ipc } from "../lib/ipc";
 import { isVideoAsset } from "../lib/media";
-import { PRESET_REMOVE_BG, PRESET_UPSCALE, runImagePreset, exportImages } from "../lib/imageActions";
+import { PRESET_REMOVE_BG, PRESET_UPSCALE, runImagePreset, exportImages, copyImageToClipboard } from "../lib/imageActions";
 import { useT } from "../i18n/locale";
 
 /** Native-style right-click menu on the canvas. On an image it flattens the
@@ -54,9 +54,10 @@ export function CanvasContextMenu({
 
   // Clamp to the viewport (rough height estimate per menu kind).
   const selectedIds = [...board.selection];
+  const selectedPlacementIds = selectedIds.filter((id) => board.placements.has(id));
   const multiSelectImage =
-    menu.kind === "image" && selectedIds.length > 1 && board.selection.has(menu.placementId);
-  const exportIds = menu.kind === "image" && multiSelectImage ? selectedIds : menu.kind === "image" ? [menu.placementId] : [];
+    menu.kind === "image" && selectedPlacementIds.length > 1 && board.selection.has(menu.placementId);
+  const exportIds = menu.kind === "image" && multiSelectImage ? selectedPlacementIds : menu.kind === "image" ? [menu.placementId] : [];
   const estH = menu.kind === "image" ? (multiSelectImage ? 192 : 320) : menu.kind === "text" ? 56 : 96;
   const left = Math.max(8, Math.min(menu.x, window.innerWidth - 208));
   const top = Math.max(8, Math.min(menu.y, window.innerHeight - estH - 8));
@@ -91,7 +92,7 @@ export function CanvasContextMenu({
           </>
         )}
         {!isVideo && (
-          <button className="cm-ctx__item" onClick={act(() => boardId && void ipc.copyImage(boardId, pid))}>
+          <button className="cm-ctx__item" onClick={act(() => boardId && void copyImageToClipboard(boardId, pid))}>
             <Copy size={14} />
             {t("img.copy")}
           </button>

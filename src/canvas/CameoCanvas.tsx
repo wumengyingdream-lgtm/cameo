@@ -12,6 +12,7 @@ import { CropOverlay } from "../components/CropOverlay";
 import { VideoOverlay } from "./VideoOverlay";
 import { CanvasContextMenu } from "../components/CanvasContextMenu";
 import { isVideoAsset } from "../lib/media";
+import { copyImageToClipboard } from "../lib/imageActions";
 import { useT } from "../i18n/locale";
 import { useFileImport } from "../lib/useFileImport";
 
@@ -236,6 +237,11 @@ export function CameoCanvas() {
         const b = useBoardStore.getState();
         if (!b.boardId || b.selection.size === 0) return;
         e.preventDefault();
+        const selectedPlacementIds = [...b.selection].filter((id) => b.placements.has(id));
+        if (selectedPlacementIds.length === 1) {
+          void copyImageToClipboard(b.boardId, selectedPlacementIds[0]);
+          return;
+        }
         // Copy the WHOLE selection (images + videos) into the in-app clipboard
         // by source path + transform, so paste re-imports all of them — even
         // across boards. The OS clipboard separately gets the first image for
