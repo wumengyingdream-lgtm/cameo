@@ -6,7 +6,7 @@ import { useHistoryStore } from "./history";
 import { useUiStore } from "./ui";
 import { useToastStore } from "./toast";
 import { getMessage } from "../i18n/locale";
-import type { Asset, ImportResult, Placement, PlacementUpdate, Shape } from "../types";
+import type { Asset, ImportResult, Placement, PlacementUpdate, Shape, TextNode, TextStyle } from "../types";
 
 /** A video minted without a poster means ffmpeg was unavailable at import time.
  *  Kick off a one-time managed install (detect-first; downloads only if truly
@@ -42,6 +42,7 @@ interface BoardState {
   name: string | null;
   assets: Map<string, Asset>;
   placements: Map<string, Placement>;
+  textNodes: Map<string, TextNode>;
   /** placementId → annotation shapes. */
   annotations: Map<string, Shape[]>;
   /** Transient "generating…" loading placeholders (not persisted). */
@@ -94,6 +95,9 @@ interface BoardState {
   /** Merge poster/metadata updates from a post-install ffmpeg backfill so the
    *  canvas swaps placeholder tiles for real stills (no reopen). */
   backfillVideoPosters: () => Promise<void>;
+  addTextNodeAt: (center: { x: number; y: number }) => Promise<TextNode | null>;
+  updateTextNode: (node: TextNode) => Promise<void>;
+  deleteTextNodes: (ids: string[]) => Promise<void>;
 }
 
 function indexById<T extends { id: string }>(items: T[]): Map<string, T> {
@@ -169,6 +173,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   name: null,
   assets: new Map(),
   placements: new Map(),
+  textNodes: new Map(),
   annotations: new Map(),
   placeholders: new Map(),
   selection: new Set(),
@@ -188,6 +193,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         name: info.name,
         assets: indexById(info.doc.assets),
         placements: indexById(info.doc.placements),
+        textNodes: indexById(info.doc.textNodes ?? []),
         annotations,
         placeholders: new Map(),
         selection: new Set(),
@@ -507,27 +513,118 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   deleteSelected: async () => {
-    const { boardId, selection, placements } = get();
+    const { boardId, selection, placements, textNodes } = get();
     if (!boardId || selection.size === 0) return;
     const ids = [...selection];
-    const deleted = ids.map((id) => placements.get(id)).filter((p): p is Placement => !!p);
+    const placementIds = ids.filter((id) => placements.has(id));
+    const textIds = ids.filter((id) => textNodes.has(id));
+    const deleted = placementIds.map((id) => placements.get(id)).filter((p): p is Placement => !!p);
+    const deletedTexts = textIds.map((id) => textNodes.get(id)).filter((t): t is TextNode => !!t);
     const remove = () => {
       set((s) => {
         const next = new Map(s.placements);
-        for (const id of ids) next.delete(id);
-        return { placements: next, selection: new Set<string>() };
+        for (const id of placementIds) next.delete(id);
+        const nextText = new Map(s.textNodes);
+        for (const id of textIds) nextText.delete(id);
+        return { placements: next, textNodes: nextText, selection: new Set<string>() };
       });
-      void ipc.deletePlacements(boardId, ids).catch((e) => set({ error: String(e) }));
+      if (placementIds.length) void ipc.deletePlacements(boardId, placementIds).catch((e) => set({ error: String(e) }));
+      if (textIds.length) void ipc.deleteTextNodes(boardId, textIds).catch((e) => set({ error: String(e) }));
     };
     const restore = () => {
       set((s) => {
         const next = new Map(s.placements);
         for (const p of deleted) next.set(p.id, p);
-        return { placements: next };
+        const nextText = new Map(s.textNodes);
+        for (const t of deletedTexts) nextText.set(t.id, t);
+        return { placements: next, textNodes: nextText };
       });
-      void ipc.restorePlacements(boardId, deleted).catch((e) => set({ error: String(e) }));
+      if (deleted.length) void ipc.restorePlacements(boardId, deleted).catch((e) => set({ error: String(e) }));
+      for (const t of deletedTexts) void ipc.updateTextNode(boardId, t).catch((e) => set({ error: String(e) }));
     };
     remove();
     useHistoryStore.getState().push({ label: "Delete", undo: restore, redo: remove });
+  },
+
+  addTextNodeAt: async (center) => {
+    const { boardId } = get();
+    if (!boardId) return null;
+    const style: TextStyle = {
+      fontFamily: "Microsoft YaHei UI",
+      fontSize: 48,
+      color: "#1a1a1c",
+      bold: false,
+      italic: false,
+      letterSpacing: 0,
+      lineHeight: 1.2,
+      align: "left",
+    };
+    try {
+      const node = await ipc.addTextNode(boardId, {
+        text: "双击编辑文字",
+        x: center.x,
+        y: center.y,
+        w: 320,
+        h: 96,
+        style,
+      });
+      set((s) => {
+        const textNodes = new Map(s.textNodes);
+        textNodes.set(node.id, node);
+        return { textNodes, selection: new Set([node.id]) };
+      });
+      const remove = () => {
+        set((s) => {
+          const textNodes = new Map(s.textNodes);
+          textNodes.delete(node.id);
+          return { textNodes, selection: new Set<string>() };
+        });
+        void ipc.deleteTextNodes(boardId, [node.id]).catch((e) => set({ error: String(e) }));
+      };
+      const add = () => {
+        set((s) => {
+          const textNodes = new Map(s.textNodes);
+          textNodes.set(node.id, node);
+          return { textNodes };
+        });
+        void ipc.updateTextNode(boardId, node).catch((e) => set({ error: String(e) }));
+      };
+      useHistoryStore.getState().push({ label: "Text", undo: remove, redo: add });
+      return node;
+    } catch (e) {
+      set({ error: String(e) });
+      return null;
+    }
+  },
+
+  updateTextNode: async (node) => {
+    const { boardId, textNodes } = get();
+    if (!boardId) return;
+    const before = textNodes.get(node.id);
+    const apply = (nextNode: TextNode) => {
+      set((s) => {
+        const textNodes = new Map(s.textNodes);
+        textNodes.set(nextNode.id, nextNode);
+        return { textNodes };
+      });
+      void ipc.updateTextNode(boardId, nextNode).catch((e) => set({ error: String(e) }));
+    };
+    apply(node);
+    if (before) useHistoryStore.getState().push({ label: "Text", undo: () => apply(before), redo: () => apply(node) });
+  },
+
+  deleteTextNodes: async (ids) => {
+    const { boardId } = get();
+    if (!boardId || ids.length === 0) return;
+    set((s) => {
+      const textNodes = new Map(s.textNodes);
+      for (const id of ids) textNodes.delete(id);
+      return { textNodes };
+    });
+    try {
+      await ipc.deleteTextNodes(boardId, ids);
+    } catch (e) {
+      set({ error: String(e) });
+    }
   },
 }));

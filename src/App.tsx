@@ -15,6 +15,7 @@ import {
   Circle,
   MapPin,
   Brush,
+  Type,
   Settings as SettingsIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -34,6 +35,7 @@ import { useSettingsStore } from "./store/settings";
 import { useUpdaterStore } from "./store/updater";
 import { useT } from "./i18n/locale";
 import type { MsgKey } from "./i18n/messages";
+import type { TextNode } from "./types";
 import { useCodexEvents } from "./lib/useCodexEvents";
 import { ipc } from "./lib/ipc";
 import { buildOverlays } from "./lib/overlay";
@@ -189,9 +191,101 @@ function Toolbar() {
       </button>
       <MarkTool />
       <span className="cm-toolbar__sep" />
+      <button
+        className={`cm-toolbtn${tool === "text" ? " is-active" : ""}`}
+        onClick={() => setTool("text")}
+        data-tip={t("tool.text")}
+        aria-label={t("tool.text")}
+      >
+        <Type size={17} />
+      </button>
       <button className="cm-toolbtn" onClick={pickImages} data-tip={t("tool.addImage")} aria-label={t("tool.addImage")}>
         <ImagePlus size={17} />
       </button>
+    </div>
+  );
+}
+
+function TextInspector() {
+  const selection = useBoardStore((s) => s.selection);
+  const textNodes = useBoardStore((s) => s.textNodes);
+  const [fonts, setFonts] = useState<string[]>(["Microsoft YaHei UI", "Microsoft YaHei", "SimSun", "SimHei", "KaiTi"]);
+  const selectedId = selection.size === 1 ? [...selection][0] : null;
+  const node = selectedId ? textNodes.get(selectedId) : null;
+  const t = useT();
+
+  useEffect(() => {
+    void ipc.listSystemFonts().then((items) => {
+      if (items.length) setFonts(items);
+    }).catch(() => undefined);
+  }, []);
+
+  if (!node) return null;
+
+  const patch = (next: Partial<TextNode> | { style: Partial<TextNode["style"]> }) => {
+    const merged: TextNode = "style" in next
+      ? { ...node, style: { ...node.style, ...next.style } }
+      : { ...node, ...next };
+    void useBoardStore.getState().updateTextNode(merged);
+  };
+
+  return (
+    <div className="cm-textpanel">
+      <textarea
+        className="cm-textpanel__text"
+        value={node.text}
+        onChange={(e) => patch({ text: e.target.value })}
+        aria-label={t("text.content")}
+      />
+      <div className="cm-textpanel__row">
+        <select value={node.style.fontFamily} onChange={(e) => patch({ style: { fontFamily: e.target.value } })}>
+          {fonts.map((font) => (
+            <option key={font} value={font}>
+              {font}
+            </option>
+          ))}
+        </select>
+        <input
+          type="number"
+          min={8}
+          max={300}
+          value={node.style.fontSize}
+          onChange={(e) => patch({ style: { fontSize: Number(e.target.value) || 48 } })}
+          aria-label={t("text.size")}
+        />
+        <input type="color" value={node.style.color} onChange={(e) => patch({ style: { color: e.target.value } })} aria-label={t("text.color")} />
+      </div>
+      <div className="cm-textpanel__row">
+        <button className={node.style.bold ? "is-active" : ""} onClick={() => patch({ style: { bold: !node.style.bold } })}>
+          B
+        </button>
+        <button className={node.style.italic ? "is-active" : ""} onClick={() => patch({ style: { italic: !node.style.italic } })}>
+          I
+        </button>
+        <label>
+          {t("text.letter")}
+          <input type="number" value={node.style.letterSpacing} onChange={(e) => patch({ style: { letterSpacing: Number(e.target.value) || 0 } })} />
+        </label>
+        <label>
+          {t("text.line")}
+          <input type="number" min={0.6} max={3} step={0.1} value={node.style.lineHeight} onChange={(e) => patch({ style: { lineHeight: Number(e.target.value) || 1.2 } })} />
+        </label>
+      </div>
+      <div className="cm-textpanel__row">
+        {(["left", "center", "right"] as const).map((align) => (
+          <button key={align} className={node.style.align === align ? "is-active" : ""} onClick={() => patch({ style: { align } })}>
+            {t(`text.align.${align}` as MsgKey)}
+          </button>
+        ))}
+        <label>
+          W
+          <input type="number" min={60} value={Math.round(node.w)} onChange={(e) => patch({ w: Number(e.target.value) || 320 })} />
+        </label>
+        <label>
+          H
+          <input type="number" min={30} value={Math.round(node.h)} onChange={(e) => patch({ h: Number(e.target.value) || 96 })} />
+        </label>
+      </div>
     </div>
   );
 }
@@ -403,6 +497,7 @@ export default function App() {
         <Sidebar />
         <div className="cm-canvasarea">
           <CameoCanvas />
+          {boardId && <TextInspector />}
           {boardId && <Toolbar />}
           <Hud />
         </div>

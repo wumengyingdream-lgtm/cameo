@@ -71,7 +71,7 @@ export function SelectionBar({ rootRef }: { rootRef: RefObject<HTMLDivElement | 
 
   return (
     <div className="cm-selbar" ref={rootRef} style={{ display: "none" }}>
-      {first && boardId && (
+      {first && boardId && firstPlacement && (
         <>
           {isVideo && (
             <button className="cm-selbar__btn" title={t("video.referenceTitle")} onClick={() => void referenceVideo()}>

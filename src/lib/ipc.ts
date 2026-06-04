@@ -18,6 +18,8 @@ import type {
   ProxySettings,
   SessionsDoc,
   Shape,
+  TextNode,
+  TextStyle,
   WorkspaceEntry,
 } from "../types";
 
@@ -70,6 +72,19 @@ export const ipc = {
 
   updatePlacements: (boardId: string, updates: PlacementUpdate[]) =>
     invoke<void>("update_placements", { boardId, updates }),
+
+  addTextNode: (
+    boardId: string,
+    request: { text: string; x: number; y: number; w: number; h: number; style?: TextStyle },
+  ) => invoke<TextNode>("add_text_node", { boardId, request }),
+
+  updateTextNode: (boardId: string, node: TextNode) =>
+    invoke<void>("update_text_node", { boardId, node }),
+
+  deleteTextNodes: (boardId: string, ids: string[]) =>
+    invoke<void>("delete_text_nodes", { boardId, ids }),
+
+  listSystemFonts: () => invoke<string[]>("list_system_fonts"),
 
   deletePlacements: (boardId: string, ids: string[]) =>
     invoke<void>("delete_placements", { boardId, ids }),

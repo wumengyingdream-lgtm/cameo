@@ -10,12 +10,12 @@ import {
   Text,
   Texture,
 } from "pixi.js";
-import type { Asset, Placement, PlacementUpdate, Shape, ShapeKind } from "../types";
+import type { Asset, Placement, PlacementUpdate, Shape, ShapeKind, TextNode } from "../types";
 import { cameoUrl, ipc } from "../lib/ipc";
 import { loadAssetObjectUrl } from "../lib/asset-url";
 import { isVideoAsset, stillPathOf } from "../lib/media";
 
-export type Tool = "select" | "hand" | "point" | "rect" | "ellipse" | "brush";
+export type Tool = "select" | "hand" | "text" | "point" | "rect" | "ellipse" | "brush";
 
 export interface SceneStats {
   fps: number;
@@ -27,6 +27,7 @@ export interface SceneStats {
  *  menu) or empty canvas (with the world coords for pasting at the cursor). */
 export type CanvasContextTarget =
   | { kind: "image"; placementId: string; x: number; y: number }
+  | { kind: "text"; textId: string; x: number; y: number }
   | { kind: "canvas"; worldX: number; worldY: number; x: number; y: number };
 
 export interface SceneCallbacks {
@@ -40,6 +41,8 @@ export interface SceneCallbacks {
   /** Native right-click on the canvas → show a custom context menu. */
   onContextMenu?: (t: CanvasContextTarget) => void;
   onCommitMoves?: (updates: PlacementUpdate[]) => void;
+  onCommitTextNodes?: (updates: TextNode[]) => void;
+  onCreateText?: (at: { x: number; y: number }) => void;
   onAnnotate?: (placementId: string, shapes: Shape[]) => void;
   onRename?: (placementId: string, newName: string) => void;
   /** Crop confirmed: rect is normalized [0,1] over the asset. */
@@ -99,6 +102,15 @@ interface Node {
    *  even though assetId didn't change. "" = nothing renderable yet (poster-less
    *  video showing the placeholder). */
   stillKey: string;
+  w: number;
+  h: number;
+}
+
+interface TextSceneNode {
+  container: Container;
+  background: Graphics;
+  outline: Graphics;
+  content: Text;
   w: number;
   h: number;
 }
@@ -232,8 +244,10 @@ export class CanvasScene {
   private boardId: string | null = null;
   private placements = new Map<string, Placement>();
   private assets = new Map<string, Asset>();
+  private textNodes = new Map<string, TextNode>();
   private annotations = new Map<string, Shape[]>();
   private nodes = new Map<string, Node>();
+  private textSceneNodes = new Map<string, TextSceneNode>();
   private selected = new Set<string>();
   private hoveredId: string | null = null;
   private tool: Tool = "select";
@@ -282,6 +296,7 @@ export class CanvasScene {
   private lastPointer = { x: 0, y: 0 };
   private dragStart = { x: 0, y: 0 };
   private dragOrigin = new Map<string, { x: number; y: number }>();
+  private textDragOrigin = new Map<string, TextNode>();
   private moved = false;
   private spacePan = false;
   private spacePanDrag = false;
@@ -428,12 +443,14 @@ export class CanvasScene {
     boardId: string | null,
     placements: Map<string, Placement>,
     assets: Map<string, Asset>,
+    textNodes: Map<string, TextNode>,
     annotations: Map<string, Shape[]>,
     placeholders: Map<string, { x: number; y: number; w: number; h: number }>
   ): void {
     this.boardId = boardId;
     this.placements = placements;
     this.assets = assets;
+    this.textNodes = textNodes;
     this.annotations = annotations;
 
     // Remove nodes whose placement is gone.
@@ -465,6 +482,18 @@ export class CanvasScene {
       } else {
         this.createNode(p);
       }
+    }
+    for (const [id, node] of this.textSceneNodes) {
+      if (!textNodes.has(id)) {
+        this.destroyTextNode(node);
+        this.textSceneNodes.delete(id);
+        this.selected.delete(id);
+      }
+    }
+    for (const t of textNodes.values()) {
+      const existing = this.textSceneNodes.get(t.id);
+      if (existing) this.updateTextNode(existing, t);
+      else this.createTextNode(t);
     }
     // Render persisted annotation marks.
     for (const [id, node] of this.nodes) {
@@ -550,6 +579,10 @@ export class CanvasScene {
     return b ? { minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY } : null;
   }
 
+  private allNodeIds(): string[] {
+    return [...this.nodes.keys(), ...this.textSceneNodes.keys()];
+  }
+
   private boundsFromEdges(minX: number, minY: number, maxX: number, maxY: number): WorldBounds {
     return {
       minX,
@@ -562,7 +595,7 @@ export class CanvasScene {
   }
 
   /** Axis-aligned world bounds for a placement transform, including rotation. */
-  private boundsForTransform(node: Node, x: number, y: number, scale: number, rotation: number): WorldBounds {
+  private boundsForTransform(node: { w: number; h: number }, x: number, y: number, scale: number, rotation: number): WorldBounds {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -590,8 +623,11 @@ export class CanvasScene {
   private currentPlacementBounds(id: string): WorldBounds | null {
     const node = this.nodes.get(id);
     const p = this.placements.get(id);
-    if (!node || !p) return null;
-    return this.boundsForTransform(node, p.x, p.y, p.scale, p.rotation);
+    if (node && p) return this.boundsForTransform(node, p.x, p.y, p.scale, p.rotation);
+    const textNode = this.textSceneNodes.get(id);
+    const t = this.textNodes.get(id);
+    if (textNode && t) return this.boundsForTransform(textNode, t.x, t.y, t.scale, t.rotation);
+    return null;
   }
 
   private unionBounds(bounds: WorldBounds[]): WorldBounds | null {
@@ -612,6 +648,11 @@ export class CanvasScene {
   private snapTargets(exclude: Set<string>): WorldBounds[] {
     const targets: WorldBounds[] = [];
     for (const id of this.nodes.keys()) {
+      if (exclude.has(id)) continue;
+      const b = this.currentPlacementBounds(id);
+      if (b) targets.push(b);
+    }
+    for (const id of this.textSceneNodes.keys()) {
       if (exclude.has(id)) continue;
       const b = this.currentPlacementBounds(id);
       if (b) targets.push(b);
@@ -786,7 +827,7 @@ export class CanvasScene {
 
   /** Frame all placements (⇧1). */
   fitAll(): void {
-    const b = this.boundsOf([...this.nodes.keys()]);
+    const b = this.boundsOf(this.allNodeIds());
     if (b) this.fitBounds(b);
   }
 
@@ -800,7 +841,7 @@ export class CanvasScene {
   /** Reset to 100%, centered on the content (⌘0). */
   resetZoom(): void {
     const s = this.safeRect();
-    const b = this.boundsOf([...this.nodes.keys()]);
+    const b = this.boundsOf(this.allNodeIds());
     const cx = b ? (b.minX + b.maxX) / 2 : 0;
     const cy = b ? (b.minY + b.maxY) / 2 : 0;
     this.cam.scale = 1;
@@ -826,7 +867,7 @@ export class CanvasScene {
     if (!this.minimapVisible || this.nodes.size === 0) return;
     const vw = this.hostEl?.clientWidth || this.app.screen.width;
     const vh = this.hostEl?.clientHeight || this.app.screen.height;
-    const b = this.boundsOf([...this.nodes.keys()]);
+    const b = this.boundsOf(this.allNodeIds());
     if (!b) return;
     // Always include the viewport so the box reflects where you are.
     const tl = this.screenToWorld(0, 0);
@@ -983,6 +1024,68 @@ export class CanvasScene {
     node.container.destroy({ children: true });
   }
 
+  private createTextNode(t: TextNode): void {
+    const container = new Container();
+    container.eventMode = "static";
+    container.cursor = this.spacePan || this.tool === "hand" ? "grab" : "move";
+
+    const background = new Graphics();
+    const content = new Text({ text: t.text, style: this.textStyleOf(t) });
+    content.anchor.set(0.5);
+    const outline = new Graphics();
+    container.addChild(background, content, outline);
+
+    const node: TextSceneNode = { container, background, outline, content, w: t.w, h: t.h };
+    container.on("pointerover", () => this.setHoveredNode(t.id));
+    container.on("pointerout", () => this.setHoveredNode(null));
+    container.on("pointerdown", (e: FederatedPointerEvent) => this.onTextPointerDown(t.id, e));
+    this.updateTextNode(node, t);
+    this.placementLayer.addChild(container);
+    this.textSceneNodes.set(t.id, node);
+  }
+
+  private textStyleOf(t: TextNode) {
+    const lineHeight = Math.max(0.6, t.style.lineHeight || 1.2);
+    return {
+      fontFamily: t.style.fontFamily,
+      fontSize: t.style.fontSize,
+      fill: t.style.color,
+      fontWeight: t.style.bold ? "700" : "400",
+      fontStyle: t.style.italic ? "italic" : "normal",
+      letterSpacing: t.style.letterSpacing,
+      lineHeight: t.style.fontSize * lineHeight,
+      align: t.style.align,
+      wordWrap: true,
+      wordWrapWidth: t.w,
+      breakWords: true,
+    } as const;
+  }
+
+  private updateTextNode(node: TextSceneNode, t: TextNode): void {
+    node.w = t.w;
+    node.h = t.h;
+    node.content.text = t.text || " ";
+    node.content.style = this.textStyleOf(t);
+    node.content.position.set(0, 0);
+    node.container.position.set(t.x, t.y);
+    node.container.scale.set(t.scale);
+    node.container.rotation = t.rotation;
+    node.container.zIndex = t.z;
+    this.drawTextBackground(node);
+    this.redrawNodeOutline(t.id);
+  }
+
+  private drawTextBackground(node: TextSceneNode): void {
+    node.background.clear();
+    node.background
+      .roundRect(-node.w / 2, -node.h / 2, node.w, node.h, 6)
+      .fill({ color: 0xffffff, alpha: 0.72 });
+  }
+
+  private destroyTextNode(node: TextSceneNode): void {
+    node.container.destroy({ children: true });
+  }
+
   /** Draw a centered, semi-transparent play-circle into `g` (world space, sized
    *  off the placement). The video tile's at-rest "this is a video" marker. */
   private drawVideoBadge(g: Graphics, w: number, h: number): void {
@@ -1008,6 +1111,11 @@ export class CanvasScene {
 
   private redrawNodeOutline(id: string): void {
     const node = this.nodes.get(id);
+    const textNode = this.textSceneNodes.get(id);
+    if (!node && textNode) {
+      this.drawTextOutline(textNode, !this.cropActive && this.selected.has(id), this.hoveredId === id);
+      return;
+    }
     if (!node) return;
     this.drawOutline(node, !this.cropActive && this.selected.has(id), this.hoveredId === id);
     // The play badge yields to the live VideoOverlay player, which renders only
@@ -1015,6 +1123,20 @@ export class CanvasScene {
     // (no live player) keeps it, so every video stays recognizable.
     if (node.videoBadge) {
       node.videoBadge.visible = !(this.selected.size === 1 && this.selected.has(id));
+    }
+  }
+
+  private drawTextOutline(node: TextSceneNode, selected: boolean, hovered: boolean): void {
+    const g = node.outline;
+    g.clear();
+    const x = -node.w / 2;
+    const y = -node.h / 2;
+    if (selected) {
+      g.roundRect(x, y, node.w, node.h, 6).stroke({ width: 2, color: ACCENT, alpha: 1 });
+    } else if (hovered) {
+      g.roundRect(x, y, node.w, node.h, 6).stroke({ width: 1.5, color: ACCENT, alpha: 0.42 });
+    } else {
+      g.roundRect(x, y, node.w, node.h, 6).stroke({ width: 1, color: 0x1a1a1c, alpha: 0.12 });
     }
   }
 
@@ -1054,6 +1176,9 @@ export class CanvasScene {
 
   private refreshOutlines(): void {
     for (const id of this.nodes.keys()) {
+      this.redrawNodeOutline(id);
+    }
+    for (const id of this.textSceneNodes.keys()) {
       this.redrawNodeOutline(id);
     }
   }
@@ -1101,6 +1226,7 @@ export class CanvasScene {
             ? "move"
             : "crosshair";
     for (const n of this.nodes.values()) n.container.cursor = nodeCursor;
+    for (const n of this.textSceneNodes.values()) n.container.cursor = nodeCursor;
     const handleCursor = panning ? "grabbing" : this.spacePan || this.tool === "hand" ? "grab" : null;
     for (let i = 0; i < this.cornerHandles.length; i++) {
       this.cornerHandles[i].cursor = handleCursor ?? HANDLE_CURSORS[i];
@@ -1748,7 +1874,8 @@ export class CanvasScene {
     const hitId = this.hitNodeAtWorld(worldX, worldY);
     if (hitId) {
       if (!this.selected.has(hitId)) this.commitSelection(new Set([hitId]));
-      this.cb.onContextMenu?.({ kind: "image", placementId: hitId, x: e.clientX, y: e.clientY });
+      if (this.textNodes.has(hitId)) this.cb.onContextMenu?.({ kind: "text", textId: hitId, x: e.clientX, y: e.clientY });
+      else this.cb.onContextMenu?.({ kind: "image", placementId: hitId, x: e.clientX, y: e.clientY });
     } else {
       this.cb.onContextMenu?.({ kind: "canvas", worldX, worldY, x: e.clientX, y: e.clientY });
     }
@@ -1772,6 +1899,24 @@ export class CanvasScene {
       const localY = (dx * sin + dy * cos) / sc;
       if (Math.abs(localX) <= node.w / 2 && Math.abs(localY) <= node.h / 2 && p.z >= hitZ) {
         hitZ = p.z;
+        hitId = id;
+      }
+    }
+    for (const [id, node] of this.textSceneNodes) {
+      const t = this.textNodes.get(id);
+      if (!t) continue;
+      const cx = node.container.position.x;
+      const cy = node.container.position.y;
+      const sc = node.container.scale.x;
+      const rot = node.container.rotation;
+      const dx = worldX - cx;
+      const dy = worldY - cy;
+      const cos = Math.cos(-rot);
+      const sin = Math.sin(-rot);
+      const localX = (dx * cos - dy * sin) / sc;
+      const localY = (dx * sin + dy * cos) / sc;
+      if (Math.abs(localX) <= node.w / 2 && Math.abs(localY) <= node.h / 2 && t.z >= hitZ) {
+        hitZ = t.z;
         hitId = id;
       }
     }
@@ -1829,7 +1974,7 @@ export class CanvasScene {
 
     // Region mark tool: drag out an annotation (rect/ellipse/brush) on this node.
     // (Hand left-drag already returned via beginPan above; exclude it for typing.)
-    if (annotatable && this.tool !== "select" && this.tool !== "hand") {
+    if (annotatable && this.tool !== "select" && this.tool !== "hand" && this.tool !== "text") {
       const node = this.nodes.get(id);
       if (!node) return;
       this.mode = "annotate";
@@ -1859,9 +2004,42 @@ export class CanvasScene {
     this.moved = false;
     this.dragStart = { x: e.global.x, y: e.global.y };
     this.dragOrigin.clear();
+    this.textDragOrigin.clear();
     for (const sid of this.selected) {
       const p = this.placements.get(sid);
       if (p) this.dragOrigin.set(sid, { x: p.x, y: p.y });
+      const t = this.textNodes.get(sid);
+      if (t) this.textDragOrigin.set(sid, { ...t });
+    }
+  }
+
+  private onTextPointerDown(id: string, e: FederatedPointerEvent): void {
+    if (this.cropActive) return;
+    if (e.button === 1 || (e.button === 0 && this.panOnLeftDrag)) {
+      this.beginPan(e, e.button === 0 && this.spacePan);
+      return;
+    }
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    this.clearSnapGuides();
+    if (e.shiftKey) {
+      const next = new Set(this.selected);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      this.commitSelection(next);
+      return;
+    }
+    if (!this.selected.has(id)) this.commitSelection(new Set([id]));
+    this.mode = "drag";
+    this.moved = false;
+    this.dragStart = { x: e.global.x, y: e.global.y };
+    this.dragOrigin.clear();
+    this.textDragOrigin.clear();
+    for (const sid of this.selected) {
+      const p = this.placements.get(sid);
+      if (p) this.dragOrigin.set(sid, { x: p.x, y: p.y });
+      const t = this.textNodes.get(sid);
+      if (t) this.textDragOrigin.set(sid, { ...t });
     }
   }
 
@@ -1875,6 +2053,11 @@ export class CanvasScene {
     this.clearSnapGuides();
     if (this.cropId) {
       this.cb.onCropCancel?.(); // click on empty space cancels crop
+      return;
+    }
+    if (this.tool === "text") {
+      const at = this.screenToWorld(e.global.x, e.global.y);
+      this.cb.onCreateText?.(at);
       return;
     }
     // Empty-space drag is a selection marquee; panning is two-finger scroll.
@@ -1910,6 +2093,10 @@ export class CanvasScene {
       this.drawSnapGuides(snapped.guides);
       for (const [sid, origin] of this.dragOrigin) {
         const node = this.nodes.get(sid);
+        if (node) node.container.position.set(origin.x + snapped.dx, origin.y + snapped.dy);
+      }
+      for (const [sid, origin] of this.textDragOrigin) {
+        const node = this.textSceneNodes.get(sid);
         if (node) node.container.position.set(origin.x + snapped.dx, origin.y + snapped.dy);
       }
     } else if (this.mode === "resize") {
@@ -2007,7 +2194,19 @@ export class CanvasScene {
           });
         }
       }
+      const textUpdates: TextNode[] = [];
+      for (const [sid, origin] of this.textDragOrigin) {
+        const node = this.textSceneNodes.get(sid);
+        if (node) {
+          textUpdates.push({
+            ...origin,
+            x: node.container.position.x,
+            y: node.container.position.y,
+          });
+        }
+      }
       if (updates.length) this.cb.onCommitMoves?.(updates);
+      if (textUpdates.length) this.cb.onCommitTextNodes?.(textUpdates);
     } else if ((this.mode === "resize" || this.mode === "rotate") && this.moved) {
       const node = this.nodes.get(this.xform.id);
       const p = this.placements.get(this.xform.id);
@@ -2102,6 +2301,13 @@ export class CanvasScene {
     const maxY = Math.max(a.y, b.y);
     const picked = new Set<string>();
     for (const id of this.nodes.keys()) {
+      const bounds = this.currentPlacementBounds(id);
+      if (!bounds) continue;
+      const intersects =
+        bounds.maxX >= minX && bounds.minX <= maxX && bounds.maxY >= minY && bounds.minY <= maxY;
+      if (intersects) picked.add(id);
+    }
+    for (const id of this.textSceneNodes.keys()) {
       const bounds = this.currentPlacementBounds(id);
       if (!bounds) continue;
       const intersects =

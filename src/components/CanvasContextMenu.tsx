@@ -57,7 +57,7 @@ export function CanvasContextMenu({
   const multiSelectImage =
     menu.kind === "image" && selectedIds.length > 1 && board.selection.has(menu.placementId);
   const exportIds = menu.kind === "image" && multiSelectImage ? selectedIds : menu.kind === "image" ? [menu.placementId] : [];
-  const estH = menu.kind === "image" ? (multiSelectImage ? 192 : 320) : 96;
+  const estH = menu.kind === "image" ? (multiSelectImage ? 192 : 320) : menu.kind === "text" ? 56 : 96;
   const left = Math.max(8, Math.min(menu.x, window.innerWidth - 208));
   const top = Math.max(8, Math.min(menu.y, window.innerHeight - estH - 8));
   const style = { left, top } as const;
@@ -107,6 +107,17 @@ export function CanvasContextMenu({
           </button>
         )}
         <div className="cm-ctx__sep" />
+        <button className="cm-ctx__item cm-ctx__item--danger" onClick={act(() => void useBoardStore.getState().deleteSelected())}>
+          <Trash2 size={14} />
+          {t("img.delete")}
+        </button>
+      </div>
+    );
+  }
+
+  if (menu.kind === "text") {
+    return (
+      <div className="cm-ctx" style={style} onPointerDown={(e) => e.stopPropagation()}>
         <button className="cm-ctx__item cm-ctx__item--danger" onClick={act(() => void useBoardStore.getState().deleteSelected())}>
           <Trash2 size={14} />
           {t("img.delete")}

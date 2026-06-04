@@ -4,7 +4,7 @@
 use crate::board::{self, BoardEntry, BoardRegistry};
 use crate::codex::{self, CodexRegistry};
 use crate::model::{
-    Annotation, Asset, BoardDoc, BoardInfo, Origin, Placement, Rect, Shape, BOARD_DOC_VERSION,
+    Annotation, Asset, BoardDoc, BoardInfo, Origin, Placement, Rect, Shape, TextNode, TextStyle, BOARD_DOC_VERSION,
 };
 use crate::paths::ensure_board_sidecar;
 use crate::session::{self, SessionsDoc};
@@ -415,6 +415,131 @@ pub fn update_placements(
         }
         Ok(())
     })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddTextNodeRequest {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub style: Option<TextStyle>,
+}
+
+#[tauri::command]
+pub fn add_text_node(
+    board_id: String,
+    request: AddTextNodeRequest,
+    registry: State<Arc<BoardRegistry>>,
+) -> Result<TextNode, String> {
+    let entry = registry.get(&board_id).ok_or("unknown board")?;
+    with_doc_save(&entry, |doc| {
+        let node = TextNode {
+            id: nanoid::nanoid!(),
+            text: if request.text.trim().is_empty() {
+                "双击编辑文字".into()
+            } else {
+                request.text
+            },
+            x: request.x,
+            y: request.y,
+            w: request.w.max(80.0),
+            h: request.h.max(40.0),
+            scale: 1.0,
+            rotation: 0.0,
+            z: doc
+                .placements
+                .iter()
+                .map(|p| p.z)
+                .chain(doc.text_nodes.iter().map(|t| t.z))
+                .max()
+                .unwrap_or(-1)
+                + 1,
+            style: request.style.unwrap_or_default(),
+        };
+        doc.text_nodes.push(node.clone());
+        Ok(node)
+    })
+}
+
+#[tauri::command]
+pub fn update_text_node(
+    board_id: String,
+    node: TextNode,
+    registry: State<Arc<BoardRegistry>>,
+) -> Result<(), String> {
+    let entry = registry.get(&board_id).ok_or("unknown board")?;
+    with_doc_save(&entry, |doc| {
+        if let Some(existing) = doc.text_nodes.iter_mut().find(|t| t.id == node.id) {
+            *existing = node;
+        } else {
+            doc.text_nodes.push(node);
+        }
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub fn delete_text_nodes(
+    board_id: String,
+    ids: Vec<String>,
+    registry: State<Arc<BoardRegistry>>,
+) -> Result<(), String> {
+    let entry = registry.get(&board_id).ok_or("unknown board")?;
+    with_doc_save(&entry, |doc| {
+        doc.text_nodes.retain(|t| !ids.contains(&t.id));
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub fn list_system_fonts() -> Vec<String> {
+    let mut fonts = HashSet::<String>::new();
+    let mut dirs = Vec::<PathBuf>::new();
+    if let Ok(windir) = std::env::var("WINDIR") {
+        dirs.push(PathBuf::from(windir).join("Fonts"));
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        dirs.push(PathBuf::from(local).join("Microsoft").join("Windows").join("Fonts"));
+    }
+    for dir in dirs {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let ext = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !matches!(ext.as_str(), "ttf" | "otf" | "ttc") {
+                    continue;
+                }
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    let name = stem
+                        .replace('_', " ")
+                        .replace('-', " ")
+                        .replace(" Bold", "")
+                        .replace(" Italic", "")
+                        .replace(" Regular", "")
+                        .trim()
+                        .to_string();
+                    if !name.is_empty() {
+                        fonts.insert(name);
+                    }
+                }
+            }
+        }
+    }
+    fonts.insert("Microsoft YaHei UI".into());
+    fonts.insert("Microsoft YaHei".into());
+    fonts.insert("SimSun".into());
+    fonts.insert("SimHei".into());
+    fonts.insert("KaiTi".into());
+    let mut out: Vec<String> = fonts.into_iter().collect();
+    out.sort_by_key(|s| s.to_lowercase());
+    out
 }
 
 /// Remove Placements from the canvas. Non-destructive: the Asset + file stay on

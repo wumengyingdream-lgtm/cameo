@@ -72,6 +72,11 @@ export function CameoCanvas() {
         return false;
       },
       onCommitMoves: (u) => alive && void useBoardStore.getState().commitMoves(u),
+      onCommitTextNodes: (nodes) => {
+        if (!alive) return;
+        for (const node of nodes) void useBoardStore.getState().updateTextNode(node);
+      },
+      onCreateText: (at) => alive && void useBoardStore.getState().addTextNodeAt(at),
       onAnnotate: (id, shapes) => alive && useBoardStore.getState().setAnnotation(id, shapes),
       onRename: (id, name) => alive && void useBoardStore.getState().renameAsset(id, name),
       onContextMenu: (t) => alive && setCtxMenu(t),
@@ -145,7 +150,7 @@ export function CameoCanvas() {
   // scene.setSelection only redraws, it never re-fires onSelectionChange.
   useEffect(() => {
     const pushData = (s = useBoardStore.getState()) =>
-      sceneRef.current?.setData(s.boardId, s.placements, s.assets, s.annotations, s.placeholders);
+      sceneRef.current?.setData(s.boardId, s.placements, s.assets, s.textNodes, s.annotations, s.placeholders);
     const pushSel = (s = useBoardStore.getState()) =>
       sceneRef.current?.setSelection([...s.selection]);
     pushData();
@@ -155,6 +160,7 @@ export function CameoCanvas() {
         state.boardId !== prev.boardId ||
         state.placements !== prev.placements ||
         state.assets !== prev.assets ||
+        state.textNodes !== prev.textNodes ||
         state.annotations !== prev.annotations ||
         state.placeholders !== prev.placeholders
       ) {
@@ -267,6 +273,8 @@ export function CameoCanvas() {
         useUiStore.getState().setTool("select");
       } else if (e.key === "h" || e.key === "H") {
         useUiStore.getState().setTool("hand");
+      } else if (e.key === "t" || e.key === "T") {
+        useUiStore.getState().setTool("text");
       } else if (e.key === "r" || e.key === "R") {
         useUiStore.getState().setTool("rect");
       }

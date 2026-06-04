@@ -47,6 +47,30 @@ export interface Placement {
   fromOpId?: string;
 }
 
+export interface TextStyle {
+  fontFamily: string;
+  fontSize: number;
+  color: string;
+  bold: boolean;
+  italic: boolean;
+  letterSpacing: number;
+  lineHeight: number;
+  align: "left" | "center" | "right";
+}
+
+export interface TextNode {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  scale: number;
+  rotation: number;
+  z: number;
+  style: TextStyle;
+}
+
 export type ShapeKind = "point" | "rect" | "ellipse" | "path";
 
 export interface Shape {
@@ -70,6 +94,7 @@ export interface BoardDoc {
   assets: Asset[];
   placements: Placement[];
   annotations?: Annotation[];
+  textNodes?: TextNode[];
 }
 
 export interface BoardInfo {

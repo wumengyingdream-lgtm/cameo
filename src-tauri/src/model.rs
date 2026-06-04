@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// with `None`); the migration is therefore a no-op beyond re-stamping the
 /// version — `media_kind` is NOT stored, it's derived from `mime` on the
 /// frontend (src/lib/media.ts) so it can never go stale.
-pub const BOARD_DOC_VERSION: u32 = 3;
+pub const BOARD_DOC_VERSION: u32 = 4;
 
 /// How an Asset entered the Board. Drives the on-disk naming scheme
 /// (`<origin>-<timestamp>` for minted files; imports keep their original name)
@@ -137,6 +137,49 @@ pub struct Annotation {
     pub shapes: Vec<Shape>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextStyle {
+    pub font_family: String,
+    pub font_size: f64,
+    pub color: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub letter_spacing: f64,
+    pub line_height: f64,
+    pub align: String,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        TextStyle {
+            font_family: "Microsoft YaHei UI".into(),
+            font_size: 48.0,
+            color: "#1a1a1c".into(),
+            bold: false,
+            italic: false,
+            letter_spacing: 0.0,
+            line_height: 1.2,
+            align: "left".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextNode {
+    pub id: String,
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub scale: f64,
+    pub rotation: f64,
+    pub z: i64,
+    pub style: TextStyle,
+}
+
 /// The persisted Board document: the spatial projection of the folder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -147,6 +190,8 @@ pub struct BoardDoc {
     /// Additive (serde default) — old docs without it load as empty.
     #[serde(default)]
     pub annotations: Vec<Annotation>,
+    #[serde(default)]
+    pub text_nodes: Vec<TextNode>,
 }
 
 impl Default for BoardDoc {
@@ -156,6 +201,7 @@ impl Default for BoardDoc {
             assets: Vec::new(),
             placements: Vec::new(),
             annotations: Vec::new(),
+            text_nodes: Vec::new(),
         }
     }
 }
