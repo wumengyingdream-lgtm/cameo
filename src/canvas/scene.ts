@@ -15,7 +15,7 @@ import { cameoUrl, ipc } from "../lib/ipc";
 import { loadAssetObjectUrl } from "../lib/asset-url";
 import { isVideoAsset, stillPathOf } from "../lib/media";
 
-export type Tool = "select" | "hand" | "text" | "point" | "rect" | "ellipse" | "brush";
+export type Tool = "select" | "hand" | "text" | "line" | "point" | "rect" | "ellipse" | "brush";
 
 export interface SceneStats {
   fps: number;
@@ -43,6 +43,7 @@ export interface SceneCallbacks {
   onCommitMoves?: (updates: PlacementUpdate[]) => void;
   onCommitTextNodes?: (updates: TextNode[]) => void;
   onCreateText?: (at: { x: number; y: number }) => void;
+  onCreateLine?: (at: { x: number; y: number }) => void;
   onAnnotate?: (placementId: string, shapes: Shape[]) => void;
   onRename?: (placementId: string, newName: string) => void;
   /** Crop confirmed: rect is normalized [0,1] over the asset. */
@@ -110,6 +111,7 @@ interface TextSceneNode {
   container: Container;
   outline: Graphics;
   content: Text;
+  line: Graphics;
   w: number;
   h: number;
 }
@@ -268,6 +270,7 @@ export class CanvasScene {
     | "annotate"
     | "markdrag"
     | "resize"
+    | "text-resize"
     | "rotate"
     | "crop"
     | "minimap" = "idle";
@@ -296,6 +299,7 @@ export class CanvasScene {
   private dragStart = { x: 0, y: 0 };
   private dragOrigin = new Map<string, { x: number; y: number }>();
   private textDragOrigin = new Map<string, TextNode>();
+  private textResizeId: string | null = null;
   private moved = false;
   private spacePan = false;
   private spacePanDrag = false;
@@ -1029,10 +1033,11 @@ export class CanvasScene {
     container.cursor = this.spacePan || this.tool === "hand" ? "grab" : "move";
 
     const content = new Text({ text: t.text, style: this.textStyleOf(t) });
+    const line = new Graphics();
     const outline = new Graphics();
-    container.addChild(content, outline);
+    container.addChild(line, content, outline);
 
-    const node: TextSceneNode = { container, outline, content, w: t.w, h: t.h };
+    const node: TextSceneNode = { container, outline, content, line, w: t.w, h: t.h };
     container.on("pointerover", () => this.setHoveredNode(t.id));
     container.on("pointerout", () => this.setHoveredNode(null));
     container.on("pointerdown", (e: FederatedPointerEvent) => this.onTextPointerDown(t.id, e));
@@ -1059,10 +1064,23 @@ export class CanvasScene {
   }
 
   private updateTextNode(node: TextSceneNode, t: TextNode): void {
+    const isLine = t.kind === "line";
     node.w = t.w;
     node.h = t.h;
+    node.container.hitArea = new Rectangle(-t.w / 2, -Math.max(t.h, (t.strokeWidth ?? 4) + 16) / 2, t.w, Math.max(t.h, (t.strokeWidth ?? 4) + 16));
     node.content.text = t.text || " ";
     node.content.style = this.textStyleOf(t);
+    node.content.visible = !isLine;
+    node.line.visible = isLine;
+    node.line.clear();
+    if (isLine) {
+      node.line.moveTo(-t.w / 2, 0).lineTo(t.w / 2, 0).stroke({
+        width: t.strokeWidth ?? 4,
+        color: this.hexColor(t.style.color),
+        alpha: 1,
+        cap: "round",
+      });
+    }
     const anchorX = t.style.align === "left" ? 0 : t.style.align === "right" ? 1 : 0.5;
     const x = t.style.align === "left" ? -t.w / 2 : t.style.align === "right" ? t.w / 2 : 0;
     node.content.anchor.set(anchorX, 0.5);
@@ -1122,12 +1140,20 @@ export class CanvasScene {
     const g = node.outline;
     g.clear();
     const x = -node.w / 2;
-    const y = -node.h / 2;
+    const h = Math.max(node.h, 12);
     if (selected) {
-      g.roundRect(x, y, node.w, node.h, 4).stroke({ width: 1, color: ACCENT, alpha: 0.72 });
+      g.roundRect(x, -h / 2, node.w, h, 4).stroke({ width: 3, color: 0x000000, alpha: 0.22 });
+      g.roundRect(x, -h / 2, node.w, h, 4).stroke({ width: 1.5, color: HALO, alpha: 0.98 });
+      g.circle(node.w / 2, 0, 5).fill({ color: HALO, alpha: 0.98 }).stroke({ width: 1, color: 0x1a1a1c, alpha: 0.28 });
     } else if (hovered) {
-      g.roundRect(x, y, node.w, node.h, 4).stroke({ width: 1, color: ACCENT, alpha: 0.28 });
+      g.roundRect(x, -h / 2, node.w, h, 4).stroke({ width: 1, color: HALO, alpha: 0.72 });
     }
+  }
+
+  private hexColor(color: string): number {
+    const hex = color.trim().replace(/^#/, "");
+    const parsed = Number.parseInt(hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex, 16);
+    return Number.isFinite(parsed) ? parsed : HALO;
   }
 
   private applyTransform(node: Node, p: Placement): void {
@@ -1964,7 +1990,7 @@ export class CanvasScene {
 
     // Region mark tool: drag out an annotation (rect/ellipse/brush) on this node.
     // (Hand left-drag already returned via beginPan above; exclude it for typing.)
-    if (annotatable && this.tool !== "select" && this.tool !== "hand" && this.tool !== "text") {
+    if (annotatable && this.tool !== "select" && this.tool !== "hand" && this.tool !== "text" && this.tool !== "line") {
       const node = this.nodes.get(id);
       if (!node) return;
       this.mode = "annotate";
@@ -2020,6 +2046,18 @@ export class CanvasScene {
       return;
     }
     if (!this.selected.has(id)) this.commitSelection(new Set([id]));
+    const t0 = this.textNodes.get(id);
+    const node0 = this.textSceneNodes.get(id);
+    const local = node0?.container.toLocal(e.global);
+    if (t0 && local && Math.abs(local.x - t0.w / 2) <= Math.max(12, 10 / this.cam.scale)) {
+      this.mode = "text-resize";
+      this.moved = false;
+      this.textResizeId = id;
+      this.dragStart = { x: e.global.x, y: e.global.y };
+      this.textDragOrigin.clear();
+      this.textDragOrigin.set(id, { ...t0 });
+      return;
+    }
     this.mode = "drag";
     this.moved = false;
     this.dragStart = { x: e.global.x, y: e.global.y };
@@ -2048,6 +2086,11 @@ export class CanvasScene {
     if (this.tool === "text") {
       const at = this.screenToWorld(e.global.x, e.global.y);
       this.cb.onCreateText?.(at);
+      return;
+    }
+    if (this.tool === "line") {
+      const at = this.screenToWorld(e.global.x, e.global.y);
+      this.cb.onCreateLine?.(at);
       return;
     }
     // Empty-space drag is a selection marquee; panning is two-finger scroll.
@@ -2088,6 +2131,20 @@ export class CanvasScene {
       for (const [sid, origin] of this.textDragOrigin) {
         const node = this.textSceneNodes.get(sid);
         if (node) node.container.position.set(origin.x + snapped.dx, origin.y + snapped.dy);
+      }
+    } else if (this.mode === "text-resize") {
+      const id = this.textResizeId;
+      const origin = id ? this.textDragOrigin.get(id) : null;
+      const node = id ? this.textSceneNodes.get(id) : null;
+      if (origin && node) {
+        if (!this.moved) {
+          if (this.pointerDistanceFrom(this.dragStart, gx, gy) < HANDLE_START_THRESHOLD_PX) return;
+          this.moved = true;
+        }
+        const dx = (gx - this.dragStart.x) / this.cam.scale;
+        const nextW = Math.max(origin.kind === "line" ? 24 : 60, origin.w + dx);
+        const nextX = origin.x + (nextW - origin.w) / 2;
+        this.updateTextNode(node, { ...origin, x: nextX, w: nextW });
       }
     } else if (this.mode === "resize") {
       const node = this.nodes.get(this.xform.id);
@@ -2197,6 +2254,13 @@ export class CanvasScene {
       }
       if (updates.length) this.cb.onCommitMoves?.(updates);
       if (textUpdates.length) this.cb.onCommitTextNodes?.(textUpdates);
+    } else if (this.mode === "text-resize" && this.moved) {
+      const id = this.textResizeId;
+      const origin = id ? this.textDragOrigin.get(id) : null;
+      const node = id ? this.textSceneNodes.get(id) : null;
+      if (id && origin && node) {
+        this.cb.onCommitTextNodes?.([{ ...origin, x: node.container.position.x, w: node.w }]);
+      }
     } else if ((this.mode === "resize" || this.mode === "rotate") && this.moved) {
       const node = this.nodes.get(this.xform.id);
       const p = this.placements.get(this.xform.id);

@@ -34,6 +34,7 @@ export const en = {
   "tool.mark": "Mark",
   "tool.markType": "Mark type",
   "tool.text": "Text (T)",
+  "tool.line": "Line (L)",
   "tool.addImage": "Add images",
   "mark.point": "Note pin",
   "mark.rect": "Box mark",
@@ -47,6 +48,8 @@ export const en = {
   "text.align.left": "Left",
   "text.align.center": "Center",
   "text.align.right": "Right",
+  "line.length": "Length",
+  "line.weight": "Weight",
 
   // HUD
   "hud.minimap": "Minimap",
@@ -318,6 +321,7 @@ export const zh: Record<MsgKey, string> = {
   "tool.mark": "批注",
   "tool.markType": "批注类型",
   "tool.text": "文字 (T)",
+  "tool.line": "横线 (L)",
   "tool.addImage": "添加图片",
   "mark.point": "纯批注",
   "mark.rect": "框选批注",
@@ -331,6 +335,8 @@ export const zh: Record<MsgKey, string> = {
   "text.align.left": "左",
   "text.align.center": "中",
   "text.align.right": "右",
+  "line.length": "长度",
+  "line.weight": "粗细",
 
   "hud.minimap": "缩略图",
   "hud.undo": "撤销 (⌘Z)",

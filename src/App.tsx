@@ -199,6 +199,14 @@ function Toolbar() {
       >
         <Type size={17} />
       </button>
+      <button
+        className={`cm-toolbtn${tool === "line" ? " is-active" : ""}`}
+        onClick={() => setTool("line")}
+        data-tip={t("tool.line")}
+        aria-label={t("tool.line")}
+      >
+        <Minus size={17} />
+      </button>
       <button className="cm-toolbtn" onClick={pickImages} data-tip={t("tool.addImage")} aria-label={t("tool.addImage")}>
         <ImagePlus size={17} />
       </button>
@@ -221,6 +229,7 @@ function TextInspector() {
   }, []);
 
   if (!node) return null;
+  const isLine = node.kind === "line";
 
   const patch = (next: Partial<TextNode> | { style: Partial<TextNode["style"]> }) => {
     const merged: TextNode = "style" in next
@@ -231,59 +240,69 @@ function TextInspector() {
 
   return (
     <div className="cm-textpanel">
-      <textarea
-        className="cm-textpanel__text"
-        value={node.text}
-        onChange={(e) => patch({ text: e.target.value })}
-        aria-label={t("text.content")}
-      />
+      {!isLine && (
+        <>
+          <textarea
+            className="cm-textpanel__text"
+            value={node.text}
+            onChange={(e) => patch({ text: e.target.value })}
+            aria-label={t("text.content")}
+          />
+          <div className="cm-textpanel__row">
+            <select value={node.style.fontFamily} onChange={(e) => patch({ style: { fontFamily: e.target.value } })}>
+              {fonts.map((font) => (
+                <option key={font} value={font}>
+                  {font}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={8}
+              max={300}
+              value={node.style.fontSize}
+              onChange={(e) => patch({ style: { fontSize: Number(e.target.value) || 48 } })}
+              aria-label={t("text.size")}
+            />
+            <input type="color" value={node.style.color} onChange={(e) => patch({ style: { color: e.target.value } })} aria-label={t("text.color")} />
+          </div>
+          <div className="cm-textpanel__row">
+            <button className={node.style.bold ? "is-active" : ""} onClick={() => patch({ style: { bold: !node.style.bold } })}>
+              B
+            </button>
+            <button className={node.style.italic ? "is-active" : ""} onClick={() => patch({ style: { italic: !node.style.italic } })}>
+              I
+            </button>
+            <label>
+              {t("text.letter")}
+              <input type="number" value={node.style.letterSpacing} onChange={(e) => patch({ style: { letterSpacing: Number(e.target.value) || 0 } })} />
+            </label>
+            <label>
+              {t("text.line")}
+              <input type="number" min={0.6} max={3} step={0.1} value={node.style.lineHeight} onChange={(e) => patch({ style: { lineHeight: Number(e.target.value) || 1.2 } })} />
+            </label>
+          </div>
+        </>
+      )}
       <div className="cm-textpanel__row">
-        <select value={node.style.fontFamily} onChange={(e) => patch({ style: { fontFamily: e.target.value } })}>
-          {fonts.map((font) => (
-            <option key={font} value={font}>
-              {font}
-            </option>
+        {!isLine && (["left", "center", "right"] as const).map((align) => (
+            <button key={align} className={node.style.align === align ? "is-active" : ""} onClick={() => patch({ style: { align } })}>
+              {t(`text.align.${align}` as MsgKey)}
+            </button>
           ))}
-        </select>
-        <input
-          type="number"
-          min={8}
-          max={300}
-          value={node.style.fontSize}
-          onChange={(e) => patch({ style: { fontSize: Number(e.target.value) || 48 } })}
-          aria-label={t("text.size")}
-        />
-        <input type="color" value={node.style.color} onChange={(e) => patch({ style: { color: e.target.value } })} aria-label={t("text.color")} />
-      </div>
-      <div className="cm-textpanel__row">
-        <button className={node.style.bold ? "is-active" : ""} onClick={() => patch({ style: { bold: !node.style.bold } })}>
-          B
-        </button>
-        <button className={node.style.italic ? "is-active" : ""} onClick={() => patch({ style: { italic: !node.style.italic } })}>
-          I
-        </button>
+        {isLine && <input type="color" value={node.style.color} onChange={(e) => patch({ style: { color: e.target.value } })} aria-label={t("text.color")} />}
         <label>
-          {t("text.letter")}
-          <input type="number" value={node.style.letterSpacing} onChange={(e) => patch({ style: { letterSpacing: Number(e.target.value) || 0 } })} />
-        </label>
-        <label>
-          {t("text.line")}
-          <input type="number" min={0.6} max={3} step={0.1} value={node.style.lineHeight} onChange={(e) => patch({ style: { lineHeight: Number(e.target.value) || 1.2 } })} />
-        </label>
-      </div>
-      <div className="cm-textpanel__row">
-        {(["left", "center", "right"] as const).map((align) => (
-          <button key={align} className={node.style.align === align ? "is-active" : ""} onClick={() => patch({ style: { align } })}>
-            {t(`text.align.${align}` as MsgKey)}
-          </button>
-        ))}
-        <label>
-          W
+          {isLine ? t("line.length") : "W"}
           <input type="number" min={60} value={Math.round(node.w)} onChange={(e) => patch({ w: Number(e.target.value) || 320 })} />
         </label>
         <label>
-          H
-          <input type="number" min={30} value={Math.round(node.h)} onChange={(e) => patch({ h: Number(e.target.value) || 96 })} />
+          {isLine ? t("line.weight") : "H"}
+          <input
+            type="number"
+            min={isLine ? 1 : 30}
+            value={Math.round(isLine ? (node.strokeWidth ?? 4) : node.h)}
+            onChange={(e) => isLine ? patch({ strokeWidth: Number(e.target.value) || 4, h: Math.max(8, (Number(e.target.value) || 4) + 8) }) : patch({ h: Number(e.target.value) || 96 })}
+          />
         </label>
       </div>
     </div>

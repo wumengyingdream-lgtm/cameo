@@ -96,6 +96,8 @@ interface BoardState {
    *  canvas swaps placeholder tiles for real stills (no reopen). */
   backfillVideoPosters: () => Promise<void>;
   addTextNodeAt: (center: { x: number; y: number }) => Promise<TextNode | null>;
+  addLineNodeAt: (center: { x: number; y: number }) => Promise<TextNode | null>;
+  duplicateTextNodes: (ids: string[]) => Promise<TextNode[]>;
   updateTextNode: (node: TextNode) => Promise<void>;
   deleteTextNodes: (ids: string[]) => Promise<void>;
 }
@@ -552,7 +554,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const style: TextStyle = {
       fontFamily: "Microsoft YaHei UI",
       fontSize: 48,
-      color: "#1a1a1c",
+      color: "#ffffff",
       bold: false,
       italic: false,
       letterSpacing: 0,
@@ -562,6 +564,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     try {
       const node = await ipc.addTextNode(boardId, {
         text: "双击编辑文字",
+        kind: "text",
         x: center.x,
         y: center.y,
         w: 320,
@@ -595,6 +598,102 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       set({ error: String(e) });
       return null;
     }
+  },
+
+  addLineNodeAt: async (center) => {
+    const { boardId } = get();
+    if (!boardId) return null;
+    const style: TextStyle = {
+      fontFamily: "Microsoft YaHei UI",
+      fontSize: 16,
+      color: "#ffffff",
+      bold: false,
+      italic: false,
+      letterSpacing: 0,
+      lineHeight: 1,
+      align: "center",
+    };
+    try {
+      const node = await ipc.addTextNode(boardId, {
+        kind: "line",
+        text: "",
+        x: center.x,
+        y: center.y,
+        w: 280,
+        h: 12,
+        strokeWidth: 4,
+        style,
+      });
+      set((s) => {
+        const textNodes = new Map(s.textNodes);
+        textNodes.set(node.id, node);
+        return { textNodes, selection: new Set([node.id]) };
+      });
+      const remove = () => {
+        set((s) => {
+          const textNodes = new Map(s.textNodes);
+          textNodes.delete(node.id);
+          return { textNodes, selection: new Set<string>() };
+        });
+        void ipc.deleteTextNodes(boardId, [node.id]).catch((e) => set({ error: String(e) }));
+      };
+      const add = () => {
+        set((s) => {
+          const textNodes = new Map(s.textNodes);
+          textNodes.set(node.id, node);
+          return { textNodes };
+        });
+        void ipc.updateTextNode(boardId, node).catch((e) => set({ error: String(e) }));
+      };
+      useHistoryStore.getState().push({ label: "Line", undo: remove, redo: add });
+      return node;
+    } catch (e) {
+      set({ error: String(e) });
+      return null;
+    }
+  },
+
+  duplicateTextNodes: async (ids) => {
+    const { boardId, textNodes, placements } = get();
+    if (!boardId) return [];
+    const originals = ids.map((id) => textNodes.get(id)).filter((t): t is TextNode => !!t);
+    if (!originals.length) return [];
+    const maxZ = Math.max(
+      -1,
+      ...[...placements.values()].map((p) => p.z),
+      ...[...textNodes.values()].map((t) => t.z),
+    );
+    const copies = originals.map((node, i) => ({
+      ...node,
+      id: crypto.randomUUID ? crypto.randomUUID() : `text-${Date.now()}-${i}`,
+      x: node.x + 32,
+      y: node.y + 32,
+      z: maxZ + i + 1,
+    }));
+    set((s) => {
+      const textNodes = new Map(s.textNodes);
+      for (const node of copies) textNodes.set(node.id, node);
+      return { textNodes, selection: new Set(copies.map((n) => n.id)) };
+    });
+    for (const node of copies) void ipc.updateTextNode(boardId, node).catch((e) => set({ error: String(e) }));
+    const remove = () => {
+      set((s) => {
+        const textNodes = new Map(s.textNodes);
+        for (const node of copies) textNodes.delete(node.id);
+        return { textNodes };
+      });
+      void ipc.deleteTextNodes(boardId, copies.map((n) => n.id)).catch((e) => set({ error: String(e) }));
+    };
+    const add = () => {
+      set((s) => {
+        const textNodes = new Map(s.textNodes);
+        for (const node of copies) textNodes.set(node.id, node);
+        return { textNodes };
+      });
+      for (const node of copies) void ipc.updateTextNode(boardId, node).catch((e) => set({ error: String(e) }));
+    };
+    useHistoryStore.getState().push({ label: "Duplicate text", undo: remove, redo: add });
+    return copies;
   },
 
   updateTextNode: async (node) => {

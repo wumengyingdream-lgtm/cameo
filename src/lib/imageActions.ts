@@ -138,6 +138,17 @@ function drawTextNode(ctx: CanvasRenderingContext2D, p: Placement, asset: Asset,
   const center = worldToImage(p, asset, t.x, t.y);
   ctx.save();
   ctx.transform(cos, sin, -sin, cos, center.x, center.y);
+  if (t.kind === "line") {
+    ctx.strokeStyle = t.style.color;
+    ctx.lineWidth = t.strokeWidth ?? 4;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(-t.w / 2, 0);
+    ctx.lineTo(t.w / 2, 0);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
   ctx.beginPath();
   ctx.rect(-t.w / 2, -t.h / 2, t.w, t.h);
   ctx.clip();

@@ -78,6 +78,7 @@ export function CameoCanvas() {
         for (const node of nodes) void useBoardStore.getState().updateTextNode(node);
       },
       onCreateText: (at) => alive && void useBoardStore.getState().addTextNodeAt(at),
+      onCreateLine: (at) => alive && void useBoardStore.getState().addLineNodeAt(at),
       onAnnotate: (id, shapes) => alive && useBoardStore.getState().setAnnotation(id, shapes),
       onRename: (id, name) => alive && void useBoardStore.getState().renameAsset(id, name),
       onContextMenu: (t) => alive && setCtxMenu(t),
@@ -238,6 +239,11 @@ export function CameoCanvas() {
         if (!b.boardId || b.selection.size === 0) return;
         e.preventDefault();
         const selectedPlacementIds = [...b.selection].filter((id) => b.placements.has(id));
+        const selectedTextIds = [...b.selection].filter((id) => b.textNodes.has(id));
+        if (selectedTextIds.length > 0 && selectedPlacementIds.length === 0) {
+          void b.duplicateTextNodes(selectedTextIds);
+          return;
+        }
         if (selectedPlacementIds.length === 1) {
           void copyImageToClipboard(b.boardId, selectedPlacementIds[0]);
           return;
@@ -281,6 +287,8 @@ export function CameoCanvas() {
         useUiStore.getState().setTool("hand");
       } else if (e.key === "t" || e.key === "T") {
         useUiStore.getState().setTool("text");
+      } else if (e.key === "l" || e.key === "L") {
+        useUiStore.getState().setTool("line");
       } else if (e.key === "r" || e.key === "R") {
         useUiStore.getState().setTool("rect");
       }

@@ -75,7 +75,7 @@ export const ipc = {
 
   addTextNode: (
     boardId: string,
-    request: { text: string; x: number; y: number; w: number; h: number; style?: TextStyle },
+    request: { kind?: TextNode["kind"]; text: string; x: number; y: number; w: number; h: number; strokeWidth?: number; style?: TextStyle },
   ) => invoke<TextNode>("add_text_node", { boardId, request }),
 
   updateTextNode: (boardId: string, node: TextNode) =>

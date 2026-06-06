@@ -420,11 +420,13 @@ pub fn update_placements(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddTextNodeRequest {
+    pub kind: Option<String>,
     pub text: String,
     pub x: f64,
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    pub stroke_width: Option<f64>,
     pub style: Option<TextStyle>,
 }
 
@@ -436,9 +438,13 @@ pub fn add_text_node(
 ) -> Result<TextNode, String> {
     let entry = registry.get(&board_id).ok_or("unknown board")?;
     with_doc_save(&entry, |doc| {
+        let kind = request.kind.unwrap_or_else(|| "text".into());
         let node = TextNode {
             id: nanoid::nanoid!(),
-            text: if request.text.trim().is_empty() {
+            kind: kind.clone(),
+            text: if kind == "line" {
+                String::new()
+            } else if request.text.trim().is_empty() {
                 "双击编辑文字".into()
             } else {
                 request.text
@@ -446,7 +452,8 @@ pub fn add_text_node(
             x: request.x,
             y: request.y,
             w: request.w.max(80.0),
-            h: request.h.max(40.0),
+            h: if kind == "line" { request.h.max(8.0) } else { request.h.max(40.0) },
+            stroke_width: request.stroke_width.unwrap_or(4.0).max(1.0),
             scale: 1.0,
             rotation: 0.0,
             z: doc

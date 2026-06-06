@@ -169,15 +169,27 @@ impl Default for TextStyle {
 #[serde(rename_all = "camelCase")]
 pub struct TextNode {
     pub id: String,
+    #[serde(default = "default_text_node_kind")]
+    pub kind: String,
     pub text: String,
     pub x: f64,
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    #[serde(default = "default_stroke_width")]
+    pub stroke_width: f64,
     pub scale: f64,
     pub rotation: f64,
     pub z: i64,
     pub style: TextStyle,
+}
+
+fn default_text_node_kind() -> String {
+    "text".into()
+}
+
+fn default_stroke_width() -> f64 {
+    4.0
 }
 
 /// The persisted Board document: the spatial projection of the folder.

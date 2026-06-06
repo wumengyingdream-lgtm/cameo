@@ -60,11 +60,13 @@ export interface TextStyle {
 
 export interface TextNode {
   id: string;
+  kind?: "text" | "line";
   text: string;
   x: number;
   y: number;
   w: number;
   h: number;
+  strokeWidth?: number;
   scale: number;
   rotation: number;
   z: number;
