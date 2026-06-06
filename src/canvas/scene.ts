@@ -1029,7 +1029,6 @@ export class CanvasScene {
     container.cursor = this.spacePan || this.tool === "hand" ? "grab" : "move";
 
     const content = new Text({ text: t.text, style: this.textStyleOf(t) });
-    content.anchor.set(0.5);
     const outline = new Graphics();
     container.addChild(content, outline);
 
@@ -1064,7 +1063,10 @@ export class CanvasScene {
     node.h = t.h;
     node.content.text = t.text || " ";
     node.content.style = this.textStyleOf(t);
-    node.content.position.set(0, 0);
+    const anchorX = t.style.align === "left" ? 0 : t.style.align === "right" ? 1 : 0.5;
+    const x = t.style.align === "left" ? -t.w / 2 : t.style.align === "right" ? t.w / 2 : 0;
+    node.content.anchor.set(anchorX, 0.5);
+    node.content.position.set(x, 0);
     node.container.position.set(t.x, t.y);
     node.container.scale.set(t.scale);
     node.container.rotation = t.rotation;
